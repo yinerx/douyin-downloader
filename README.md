@@ -1,2 +1,122 @@
-# douyin-downloader
-个人自用的抖音无水印视频下载 Android App
+# 抖音无水印
+
+个人自用的 Android 应用。从抖音分享里保存**没有抖音角标、没有片尾引流卡**的视频，写进手机相册。侧载到自己的手机即可，不打算上架应用商店。
+
+只处理你自己能打开的公开分享链接。请只保存你有权留存的内容，不要把别人的作品再发出去。
+
+## 怎么用
+
+应用名是「抖音无水印」。界面是简体中文。
+
+### 从抖音分享
+
+1. 在抖音里打开视频，点「分享」。
+2. 在系统分享面板里选「抖音无水印」。
+3. 应用会开始下载，界面上能看到进度。成功后提示已保存。
+
+如果分享面板里没有本应用：点「更多」或分享面板的编辑按钮，把「抖音无水印」打开。小米的分享面板有时要滑到底。
+
+### 从剪贴板
+
+1. 在抖音里点「复制链接」。文案里通常夹着 `https://v.douyin.com/xxxx/`，前后可以有别的字。
+2. 打开本应用。它会读剪贴板，认出抖音链接后问你要不要下载。
+3. 点「下载」。点「忽略」则这次不再提示同一条链接。
+
+Android 12 及以上在应用读取剪贴板时会弹出系统提示，这是系统行为，不是故障。
+
+也可以把分享文案直接贴进输入框，再点「开始下载」。
+
+短链（`v.douyin.com`，包含下划线）、`www.douyin.com/video/数字`、`iesdouyin.com/share/video/数字`、带 `modal_id=` 的链接都可以。认不出来时会写出原因，例如不是抖音链接、作品已删除、或是图文。
+
+### 文件在哪
+
+视频保存到相册的 `DCIM/Douyin`，文件名是「标题_作品编号.mp4」。系统相册和 Google 相册一般会在「视频」里看到它。小米相册如果没立刻出现，下拉刷新，或到「文件管理 → DCIM → Douyin」查看。下载记录在应用里，点「打开视频」用系统播放器打开。
+
+## 编译
+
+需要 JDK 17 或更高，以及 Android SDK：`platforms;android-35` 和 `build-tools;35.0.0`。`minSdk` 是 26。
+
+在项目根目录建 `local.properties`（不要提交）：
+
+```
+sdk.dir=/你的/Android/Sdk
+```
+
+然后：
+
+```bash
+./gradlew :parser:test
+./gradlew assembleDebug
+```
+
+调试 APK 在：
+
+```
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+解析逻辑在独立的 `:parser` 模块里，不依赖 Android，单元测试只跑这个模块。
+
+## 安装到小米手机
+
+手机要有 Google 服务（用来提供系统 WebView 也行，小米自带 WebView 同样可用）。不需要登录抖音账号。
+
+用数据线：
+
+1. 手机打开「设置 → 我的设备 → 全部参数」，连点「MIUI 版本」打开开发者选项。
+2. 「设置 → 更多设置 → 开发者选项」里打开「USB 调试」。
+3. 电脑上执行 `adb install -r app-debug.apk`。
+
+不用电脑：把 APK 拷到手机，用文件管理打开。若被拦住，到「设置 → 隐私保护 → 特殊权限 → 安装未知应用」，给当前用来打开 APK 的应用（文件管理或浏览器）允许安装。
+
+装好后第一次从抖音分享时，如果列表里没有本应用，按上一节把分享目标打开。
+
+## 解析原理（2026-11-19 实测）
+
+抖音现在不让服务器直接拿播放地址。下面几条在当天对公开链接请求过，都走不通：
+
+| 做法 | 结果 |
+| --- | --- |
+| `www.iesdouyin.com/share/video/{id}/` 的 `window._ROUTER_DATA` | 有这个对象，但没有 `videoInfoRes` / `play_addr` |
+| `www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=` | HTTP 200，正文是空的 |
+| `www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=` | `403 Blocked by ArgusSecurityPlugin Uifid Not Found` |
+
+还能用的做法是让一个真实的手机浏览器打开分享页，读它自己填好的数据：
+
+1. 从分享文案里取出链接（`:parser` 的 `ShareTextParser`）。短链可以夹在任意文字里，短码允许下划线。
+2. 跟随 `v.douyin.com` 的跳转，从最终 URL 取出作品编号（`AwemeIds`）。删除的作品常跳到 `jingxuan` 或带 `web_video_404`，这时直接报错，避免下到别的推荐视频。
+3. 先用手机 UA 请求 `https://www.iesdouyin.com/share/video/{id}/`。如果 HTML 里的 `_ROUTER_DATA` 已经带了视频（以后若恢复服务端渲染），就不再开 WebView。
+4. 否则用隐藏的 WebView、同一套手机 UA 打开 `https://m.douyin.com/share/video/{id}/`，轮询直到 `window._ROUTER_DATA` 里出现该作品的 `play_addr`。2026-11-19 这条路径对两条公开视频都在几秒内成功。
+5. `VideoInfoParser` 在 JSON 里找 `aweme_id` 与 `video.play_addr.uri`，不写死 `loaderData` 的路径。
+6. `NoWatermarkUrls` 只用 `/aweme/v1/play/`（没有 `wm`）拼出 1080p、720p 和 `ratio=default&watermark=0`。下载前用 `Range` 看文件大小和 `ftyp` 头，选最大的一个。请求带 `Referer: https://m.douyin.com/`。
+
+不要把 `playwm` 放进候选。它有时比无水印文件更大，因为多了角标和片尾，按体积挑选会被选中。
+
+当天核对过的两条公开链接：
+
+- `https://v.douyin.com/J4IQiholWbo/` → 作品 `7624728488368732900`，uri `v0d00fg10000d787jq7og65p3g4j12r0`。`play` 1080p 约 26.8 MB，`play` 720p 约 15.5 MB，`playwm` 720p 约 17.4 MB。都是 `ftypisom`。
+- `https://v.douyin.com/GOPRuJTWTe4/` → 作品 `7662968410262736166`，uri `v0200fg10000d9c57nnog65ohseq72n0`。`play` 1080p 为 1080×1440、约 8.6 秒、有音轨、画面没有抖音角标。`playwm` 720p 更长（约 11.6 秒），画面左上角有抖音 logo 和抖音号，结尾是「来抖音 发现更多创作者」卡片。
+
+作者自己烧在画面里的字幕、台标不会去掉。应用去掉的是抖音加上的角标和片尾。
+
+## 失效了怎么改
+
+改动集中在 `parser/src/main/kotlin/app/douyin/save/parser/`。改完跑 `./gradlew :parser:test`。
+
+1. 手机连上电脑，复现一次失败，看日志：`adb logcat -s DouyinSave:I`。里面有跳转后的 URL、走的是 `ssr` 还是 `webview`、以及 `play` 地址（问号前面的部分）。调试包也可以用桌面 Chrome 打开 `chrome://inspect` 看隐藏 WebView。
+2. 用手机 UA 打开 `https://m.douyin.com/share/video/作品编号/`，在控制台读 `window._ROUTER_DATA`。
+3. 字段还叫 `aweme_id` 和 `video.play_addr.uri`、只是外层路径变了：`VideoInfoParser` 会自己找，通常不用改。路径和字段都变了，就改 `consider()`。
+4. 播放域名或参数变了：改 `NoWatermarkUrls`。用 `curl -H "Referer: https://m.douyin.com/" -H "Range: bytes=0-31" -A "手机UA"` 确认响应是 `video/mp4`，前几个字节里有 `ftyp`，并且地址路径是 `/play/` 不是 `/playwm/`。
+5. 短链不再 302：看 `app` 模块的 `LinkResolver`。作品编号的新位置：改 `AwemeIds`。
+6. 分享页必须登录或出验证码：这版没有登录态，只能提示失败。不要把账号 cookie 写进仓库。
+
+## 隐私
+
+链接只发给抖音自己的域名，用来取这一条视频。应用不上传到其他服务器，也不带登录。下载记录存在应用私有目录的 `history.json`。
+
+## 限制
+
+- 只下载视频。图文、合集链接会提示不支持。
+- 私密、已删除、或被风控拦住的作品会失败，并在界面上说明。
+- 播放地址会过期，所以每次下载都重新解析，不把地址存下来。
+- 下载过程中请留在应用里。滑掉应用会中断这一次。
