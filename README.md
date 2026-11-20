@@ -71,6 +71,69 @@ app/build/outputs/apk/debug/app-debug.apk
 
 装好后第一次从抖音分享时，如果列表里没有本应用，按上一节把分享目标打开。
 
+## 在线更新
+
+应用里有「检查更新」。默认启动时也会查一次，可以用开关关掉。查到新版本会显示说明，下载 APK 后交给系统安装器。安装前如果系统拦住，按提示给本应用打开「安装未知应用」。
+
+版本号在 `app/build.gradle.kts` 的 `versionCode` / `versionName`。发新版时先把这两个数字改大（`versionCode` 必须比手机上的大），提交后推一个和 `versionName` 一样的 tag，例如 `1.0.2`：
+
+```bash
+git tag 1.0.2
+git push origin 1.0.2
+```
+
+GitHub Actions（`.github/workflows/release.yml`）会用同一把签名打 release APK，挂到这个 tag 的 Release 上，并附带 `latest.json`。Release 正文里有一行 `versionCode: 数字`，应用靠它判断新旧。
+
+### 签名必须始终是同一把
+
+已经装在手机上的包，证书指纹是 `BA:29:1A:A7:11:1C:71:DE:3B:67:E4:E9:81:CE:B5:2B:B8:01:97:2F:4C:4D:FF:95:DD:A1:C6:62:71:83:8B:B9`。以后的包必须用这把钥匙签，系统才允许覆盖安装。换一把钥匙的话，Android 会拒绝更新，只能先卸载。
+
+钥匙文件不要提交。本地做法：
+
+```bash
+mkdir -p signing
+# 把当初签过 1.0.0 的 release.keystore 放到 signing/release.keystore
+cp keystore.properties.example keystore.properties
+```
+
+`keystore.properties.example` 里的别名是 `androiddebugkey`，两个密码都是 `android`。这是那份已经发出去的钥匙的口令，不是新生成的。真正要保密的是 keystore 文件本身。
+
+CI 需要四个仓库 Secret（Settings → Secrets and variables → Actions）：
+
+| Secret | 内容 |
+| --- | --- |
+| `KEYSTORE_BASE64` | `base64 -w0 signing/release.keystore` 的输出 |
+| `KEYSTORE_PASSWORD` | `android` |
+| `KEY_ALIAS` | `androiddebugkey` |
+| `KEY_PASSWORD` | `android` |
+
+没有这四个 Secret 时，打 tag 的工作流会直接失败，不会发出用别的钥匙签的包。
+
+### 仓库现在是私有的
+
+手机不会带 GitHub 登录。默认更新地址是：
+
+```
+https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
+```
+
+私有仓库对这个请求返回 404，应用会说明读不到更新，不会假装已经是最新版。不要把 token 写进应用。要让手机自己更新，任选一种：
+
+1. 把 `yinerx/douyin-downloader` 改成公开。默认地址就能用。我没有改仓库可见性。
+2. 另建一个公开仓库，只放 Release。把应用里的「更新地址」改成那个仓库的 `releases/latest`，或者改成下面这种 JSON 的公开链接。
+3. 把 `latest.json` 放到任何公开的 HTTPS 地址。应用认这种格式：
+
+```json
+{
+  "versionCode": 3,
+  "versionName": "1.0.2",
+  "changelog": "写给自己看的说明",
+  "apkUrl": "https://example.com/douyin-save.apk"
+}
+```
+
+地址写在 `gradle.properties` 的 `updateManifestUrl`，打进包里当默认值。装好之后也可以在「检查更新」卡片里改，存在本机，不用重新编译。
+
 ## 解析原理（2026-11-19 实测）
 
 抖音现在不让服务器直接拿播放地址。下面几条在当天对公开链接请求过，都走不通：

@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import app.douyin.save.parser.AwemeIds
 import app.douyin.save.parser.DouyinRequest
 import app.douyin.save.parser.ParseException
+import app.douyin.save.parser.RemoteUpdate
 import app.douyin.save.parser.ShareTextParser
 import app.douyin.save.parser.VideoInfoParser
 import java.io.IOException
@@ -18,8 +19,11 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -38,10 +42,18 @@ internal data class UiState(
     val status: String = "",
     val progress: Float? = null,
     val history: List<HistoryEntry> = emptyList(),
+    val updateUrl: String = "",
+    val checkOnLaunch: Boolean = true,
+    val updateStatus: String = "",
+    val updateChecking: Boolean = false,
+    val updateOffer: RemoteUpdate? = null,
+    val updateDownloading: Boolean = false,
+    val updateProgress: Float? = null,
 )
 
 internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val historyStore = HistoryStore(app)
+    private val prefs = UpdatePrefs(app)
     private val client = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
@@ -55,10 +67,19 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val sharePage = HttpSharePage(client)
     private val downloader = VideoDownloader(downloadClient)
     private val gallery = GallerySaver(app, downloader)
+    private val updater = AppUpdater(app, client)
+    private val _installRequests = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val installRequests: SharedFlow<String> = _installRequests.asSharedFlow()
 
     var routerSource: RouterJsonSource? = null
 
-    private val _state = MutableStateFlow(UiState(history = historyStore.load()))
+    private val _state = MutableStateFlow(
+        UiState(
+            history = historyStore.load(),
+            updateUrl = prefs.updateUrl(),
+            checkOnLaunch = prefs.checkOnLaunch(),
+        ),
+    )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var job: Job? = null
@@ -180,6 +201,94 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 progress = 1f,
                 history = historyStore.load(),
             )
+        }
+    }
+
+    fun setCheckOnLaunch(enabled: Boolean) {
+        prefs.setCheckOnLaunch(enabled)
+        _state.update { it.copy(checkOnLaunch = enabled) }
+    }
+
+    fun setUpdateUrl(url: String) {
+        prefs.setUpdateUrl(url)
+        _state.update { it.copy(updateUrl = url) }
+    }
+
+    fun checkForUpdate(manual: Boolean) {
+        if (!manual && !_state.value.checkOnLaunch) return
+        if (_state.value.updateChecking || _state.value.updateDownloading) return
+        val url = _state.value.updateUrl.trim().ifBlank { prefs.updateUrl() }
+        viewModelScope.launch {
+            if (manual) {
+                _state.update { it.copy(updateChecking = true, updateStatus = "正在检查更新…") }
+            } else {
+                _state.update { it.copy(updateChecking = true) }
+            }
+            val result = try {
+                withContext(Dispatchers.IO) { updater.check(url) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                UpdateCheckResult.Failed(userMessage(error))
+            }
+            when (result) {
+                is UpdateCheckResult.UpToDate -> _state.update {
+                    it.copy(
+                        updateChecking = false,
+                        updateStatus = if (manual) "已是最新版本（${result.versionName}）" else it.updateStatus,
+                    )
+                }
+                is UpdateCheckResult.Failed -> _state.update {
+                    it.copy(
+                        updateChecking = false,
+                        updateStatus = if (manual) result.message else it.updateStatus,
+                    )
+                }
+                is UpdateCheckResult.Available -> {
+                    val quiet = !manual && result.info.versionCode > 0 &&
+                        result.info.versionCode == prefs.dismissedCode()
+                    _state.update {
+                        it.copy(
+                            updateChecking = false,
+                            updateOffer = if (quiet) it.updateOffer else result.info,
+                            updateStatus = if (manual && quiet) "" else it.updateStatus,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        val code = _state.value.updateOffer?.versionCode ?: 0
+        if (code > 0) prefs.setDismissed(code)
+        _state.update { it.copy(updateOffer = null) }
+    }
+
+    fun downloadUpdate() {
+        val offer = _state.value.updateOffer ?: return
+        if (_state.value.updateDownloading) return
+        viewModelScope.launch {
+            _state.update { it.copy(updateDownloading = true, updateProgress = null) }
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    updater.download(offer.apkUrl) { fraction ->
+                        _state.update { it.copy(updateProgress = fraction) }
+                    }
+                }
+                _state.update { it.copy(updateDownloading = false, updateProgress = 1f) }
+                _installRequests.emit(file.absolutePath)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        updateDownloading = false,
+                        updateProgress = null,
+                        updateStatus = userMessage(error),
+                    )
+                }
+            }
         }
     }
 

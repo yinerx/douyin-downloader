@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import app.douyin.save.parser.RemoteUpdate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -14,19 +15,25 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +60,11 @@ internal fun HomeScreen(
     onDownloadClipboard: () -> Unit,
     onDismissClipboard: () -> Unit,
     onOpen: (HistoryEntry) -> Unit,
+    onCheckUpdate: () -> Unit,
+    onUpdateUrl: (String) -> Unit,
+    onCheckOnLaunch: (Boolean) -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onDismissUpdate: () -> Unit,
 ) {
     val busy = state.phase == Phase.Working
     Scaffold(containerColor = Paper) { padding ->
@@ -199,9 +211,121 @@ internal fun HomeScreen(
                     }
                 }
             }
+            item {
+                UpdateSection(
+                    state = state,
+                    busy = busy,
+                    onCheckUpdate = onCheckUpdate,
+                    onUpdateUrl = onUpdateUrl,
+                    onCheckOnLaunch = onCheckOnLaunch,
+                )
+            }
             item { Text("", modifier = Modifier.padding(bottom = 8.dp)) }
         }
     }
+    val offer = state.updateOffer
+    if (offer != null) {
+        UpdateDialog(
+            offer = offer,
+            downloading = state.updateDownloading,
+            progress = state.updateProgress,
+            onDownload = onDownloadUpdate,
+            onDismiss = onDismissUpdate,
+        )
+    }
+}
+
+@Composable
+private fun UpdateSection(
+    state: UiState,
+    busy: Boolean,
+    onCheckUpdate: () -> Unit,
+    onUpdateUrl: (String) -> Unit,
+    onCheckOnLaunch: (Boolean) -> Unit,
+) {
+    Section {
+        Text("检查更新", color = Ink, fontWeight = FontWeight.Medium)
+        Text("当前版本 ${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 13.sp)
+        OutlinedTextField(
+            value = state.updateUrl,
+            onValueChange = onUpdateUrl,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("更新地址") },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("启动时自动检查", color = Ink, modifier = Modifier.weight(1f))
+            Switch(checked = state.checkOnLaunch, onCheckedChange = onCheckOnLaunch)
+        }
+        OutlinedButton(
+            onClick = onCheckUpdate,
+            enabled = !busy && !state.updateChecking && !state.updateDownloading,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text(if (state.updateChecking) "正在检查…" else "检查更新")
+        }
+        if (state.updateStatus.isNotBlank()) {
+            val color = when {
+                state.updateStatus.startsWith("已是最新") -> Good
+                state.updateStatus.startsWith("读不到") ||
+                    state.updateStatus.contains("失败") ||
+                    state.updateStatus.startsWith("没有网络") -> Bad
+                else -> Ink
+            }
+            Text(state.updateStatus, color = color, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun UpdateDialog(
+    offer: RemoteUpdate,
+    downloading: Boolean,
+    progress: Float?,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        title = { Text("发现新版本 ${offer.versionName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("更新说明", color = Muted, fontSize = 13.sp)
+                Text(
+                    offer.changelog,
+                    modifier = Modifier
+                        .heightIn(max = 180.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+                if (downloading) {
+                    if (progress == null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Ink, trackColor = Line)
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Ink,
+                            trackColor = Line,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDownload,
+                enabled = !downloading,
+                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Color.White),
+            ) {
+                Text(if (downloading) "正在下载…" else "下载并安装")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !downloading) { Text("以后再说") }
+        },
+    )
 }
 
 @Composable

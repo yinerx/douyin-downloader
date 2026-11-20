@@ -21,6 +21,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -65,14 +67,23 @@ class MainActivity : ComponentActivity() {
                     onDownloadClipboard = { runWithStorage { viewModel.downloadClipboard() } },
                     onDismissClipboard = viewModel::dismissClipboard,
                     onOpen = { openVideo(this@MainActivity, it) },
+                    onCheckUpdate = { viewModel.checkForUpdate(manual = true) },
+                    onUpdateUrl = viewModel::setUpdateUrl,
+                    onCheckOnLaunch = viewModel::setCheckOnLaunch,
+                    onDownloadUpdate = { installOrAskPermission() },
+                    onDismissUpdate = viewModel::dismissUpdate,
                 )
+                InstallUpdateEffect()
             }
         }
         // Creating a WebView during the first frame stops the system splash screen
         // from exiting. The activity window is then left at alpha 0, which looks like
         // a permanent white screen. Attach the WebView only after that first draw.
         window.decorView.doOnPreDraw {
-            window.decorView.post { attachWebView() }
+            window.decorView.post {
+                attachWebView()
+                viewModel.checkForUpdate(manual = false)
+            }
         }
         handleShare(intent)
     }
@@ -149,6 +160,33 @@ class MainActivity : ComponentActivity() {
         val text = queuedShare ?: return
         queuedShare = null
         runWithStorage { viewModel.start(text) }
+    }
+
+    private fun installOrAskPermission() {
+        if (!UpdateInstaller.canInstall(this)) {
+            Toast.makeText(this, "请允许本应用安装未知应用，然后回来再点一次。", Toast.LENGTH_LONG).show()
+            UpdateInstaller.openInstallPermission(this)
+            return
+        }
+        viewModel.downloadUpdate()
+    }
+
+    @Composable
+    private fun InstallUpdateEffect() {
+        LaunchedEffect(Unit) {
+            viewModel.installRequests.collect { path ->
+                val file = java.io.File(path)
+                if (!UpdateInstaller.canInstall(this@MainActivity)) {
+                    Toast.makeText(this@MainActivity, "请允许本应用安装未知应用，然后回来再点一次。", Toast.LENGTH_LONG).show()
+                    UpdateInstaller.openInstallPermission(this@MainActivity)
+                } else {
+                    runCatching { UpdateInstaller.install(this@MainActivity, file) }
+                        .onFailure { error ->
+                            Toast.makeText(this@MainActivity, "无法打开安装器：${error.message}", Toast.LENGTH_LONG).show()
+                        }
+                }
+            }
+        }
     }
 
     private fun runWithStorage(action: () -> Unit) {
