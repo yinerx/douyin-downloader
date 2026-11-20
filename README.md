@@ -88,40 +88,35 @@ GitHub Actions（`.github/workflows/release.yml`）会用同一把签名打 rele
 
 已经装在手机上的包，证书指纹是 `BA:29:1A:A7:11:1C:71:DE:3B:67:E4:E9:81:CE:B5:2B:B8:01:97:2F:4C:4D:FF:95:DD:A1:C6:62:71:83:8B:B9`。以后的包必须用这把钥匙签，系统才允许覆盖安装。换一把钥匙的话，Android 会拒绝更新，只能先卸载。
 
-钥匙文件不要提交。本地做法：
+钥匙和口令只放在 GitHub Actions 的仓库 Secret 里，不要写进 git，也不要写进 `keystore.properties` 再提交。`keystore.properties` 和 `signing/` 已在 `.gitignore` 里。仓库里的 `keystore.properties.example` 只有空字段。
+
+本地如果要自己签，把钥匙放到 `signing/release.keystore`，再复制示例文件并填上口令（这个文件不会被提交）：
 
 ```bash
 mkdir -p signing
-# 把当初签过 1.0.0 的 release.keystore 放到 signing/release.keystore
 cp keystore.properties.example keystore.properties
 ```
 
-`keystore.properties.example` 里的别名是 `androiddebugkey`，两个密码都是 `android`。这是那份已经发出去的钥匙的口令，不是新生成的。真正要保密的是 keystore 文件本身。
-
-CI 需要四个仓库 Secret（Settings → Secrets and variables → Actions）：
+CI 在打 tag 时读取这四个 Secret（Settings → Secrets and variables → Actions）。缺任何一个，工作流会失败，不会改用别的钥匙：
 
 | Secret | 内容 |
 | --- | --- |
-| `KEYSTORE_BASE64` | `base64 -w0 signing/release.keystore` 的输出 |
-| `KEYSTORE_PASSWORD` | `android` |
-| `KEY_ALIAS` | `androiddebugkey` |
-| `KEY_PASSWORD` | `android` |
+| `KEYSTORE_BASE64` | 钥匙文件的 base64（`base64 -w0 signing/release.keystore`） |
+| `KEYSTORE_PASSWORD` | keystore 口令 |
+| `KEY_ALIAS` | 密钥别名 |
+| `KEY_PASSWORD` | 密钥口令 |
 
-没有这四个 Secret 时，打 tag 的工作流会直接失败，不会发出用别的钥匙签的包。
+### 公开的 Release
 
-### 仓库现在是私有的
-
-手机不会带 GitHub 登录。默认更新地址是：
+仓库已经是公开的。应用不带登录，直接请求：
 
 ```
 https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
 ```
 
-私有仓库对这个请求返回 404，应用会说明读不到更新，不会假装已经是最新版。不要把 token 写进应用。要让手机自己更新，任选一种：
+发布附件的下载地址同样公开，手机不用 token。还没有任何 Release 时，这个接口返回 404，应用会写「还没有发布」，不会当成已经是最新版。
 
-1. 把 `yinerx/douyin-downloader` 改成公开。默认地址就能用。我没有改仓库可见性。
-2. 另建一个公开仓库，只放 Release。把应用里的「更新地址」改成那个仓库的 `releases/latest`，或者改成下面这种 JSON 的公开链接。
-3. 把 `latest.json` 放到任何公开的 HTTPS 地址。应用认这种格式：
+默认地址在 `gradle.properties` 的 `updateManifestUrl`。装好之后也可以在「检查更新」卡片里改，存在本机。自定义地址如果是一份 JSON，格式是：
 
 ```json
 {
@@ -131,8 +126,6 @@ https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
   "apkUrl": "https://example.com/douyin-save.apk"
 }
 ```
-
-地址写在 `gradle.properties` 的 `updateManifestUrl`，打进包里当默认值。装好之后也可以在「检查更新」卡片里改，存在本机，不用重新编译。
 
 ## 解析原理（2026-11-19 实测）
 

@@ -8,8 +8,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 
-internal const val UPDATE_UNREACHABLE =
-    "读不到更新。仓库 yinerx/douyin-downloader 目前是私有的，手机没有登录 GitHub，Release 接口不会返回内容。把仓库改成公开，或把下面的更新地址改成一个谁都能打开的 JSON 链接。"
+internal const val UPDATE_NOT_PUBLISHED =
+    "还没有发布。推送一个和 versionName 相同的 tag 之后，这里才会出现新版本。"
+
+internal const val UPDATE_NOT_AN_APK =
+    "下载到的不是 APK。确认 Release 里的附件是公开的安装包。"
 
 internal sealed class UpdateCheckResult {
     data class Available(val info: RemoteUpdate) : UpdateCheckResult()
@@ -29,8 +32,11 @@ internal class AppUpdater(
             .build()
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            if (response.code == 401 || response.code == 403 || response.code == 404) {
-                return UpdateCheckResult.Failed(UPDATE_UNREACHABLE)
+            if (response.code == 404) {
+                return UpdateCheckResult.Failed(UPDATE_NOT_PUBLISHED)
+            }
+            if (response.code == 401 || response.code == 403) {
+                return UpdateCheckResult.Failed("检查更新失败（HTTP ${response.code}）。")
             }
             if (!response.isSuccessful) {
                 return UpdateCheckResult.Failed("检查更新失败（HTTP ${response.code}）。")
@@ -55,16 +61,16 @@ internal class AppUpdater(
             .header("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
             .build()
         client.newCall(request).execute().use { response ->
-            if (response.code == 401 || response.code == 403 || response.code == 404) {
-                throw ParseException(UPDATE_UNREACHABLE)
+            if (response.code == 404) {
+                throw ParseException(UPDATE_NOT_PUBLISHED)
             }
-            if (!response.isSuccessful) {
+            if (response.code == 401 || response.code == 403 || !response.isSuccessful) {
                 throw ParseException("下载更新包失败（HTTP ${response.code}）。")
             }
             val body = response.body ?: throw ParseException("更新包是空的。")
             val type = response.header("Content-Type").orEmpty()
             if (type.contains("text/html")) {
-                throw ParseException(UPDATE_UNREACHABLE)
+                throw ParseException(UPDATE_NOT_AN_APK)
             }
             val dir = File(context.cacheDir, "updates").apply { mkdirs() }
             val file = File(dir, "douyin-save-update.apk")
@@ -81,7 +87,7 @@ internal class AppUpdater(
                             val zip = count >= 2 && buffer[0] == 'P'.code.toByte() && buffer[1] == 'K'.code.toByte()
                             if (!zip) {
                                 file.delete()
-                                throw ParseException(UPDATE_UNREACHABLE)
+                                throw ParseException(UPDATE_NOT_AN_APK)
                             }
                             checked = true
                         }
