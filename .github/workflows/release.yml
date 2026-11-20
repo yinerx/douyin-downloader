@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install Android SDK
+        run: |
+          set -euo pipefail
+          SDK_ROOT="$HOME/android-sdk"
+          mkdir -p "$SDK_ROOT/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools "$SDK_ROOT/cmdline-tools/latest"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Require the signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" || { echo "Missing repository secret KEYSTORE_BASE64"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing repository secret KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing repository secret KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing repository secret KEY_PASSWORD"; exit 1; }
+
+      - name: Decode the PKCS12 signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p signing
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > signing/release.keystore
+
+      - name: Resolve the release tag
+        id: version
+        run: |
+          set -euo pipefail
+          NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$NAME"
+          else
+            STRIPPED="${GITHUB_REF_NAME#v}"
+            STRIPPED="${STRIPPED#V}"
+            if [ "$STRIPPED" != "$NAME" ]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match versionName ${NAME}."
+              echo "Push a tag equal to versionName, with an optional leading v."
+              exit 1
+            fi
+            TAG="$GITHUB_REF_NAME"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build the release APK
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/signing/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_TYPE: pkcs12
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Write the release notes and latest.json
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          APK_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/douyin-save.apk
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/release/*.apk douyin-save.apk
+          {
+            if [ -f RELEASE_NOTES.md ]; then
+              cat RELEASE_NOTES.md
+              printf '\n\n'
+            fi
+            printf 'versionCode: %s\n' "$VERSION_CODE"
+          } > release-body.md
+          python3 - << 'PY'
+          import json, os
+          notes = open("release-body.md", encoding="utf-8").read()
+          changelog = "\n".join(
+              line for line in notes.splitlines() if not line.startswith("versionCode:")
+          ).strip()
+          json.dump(
+              {
+                  "versionCode": int(os.environ["VERSION_CODE"]),
+                  "versionName": os.environ["VERSION_NAME"],
+                  "changelog": changelog,
+                  "apkUrl": os.environ["APK_URL"],
+              },
+              open("latest.json", "w", encoding="utf-8"),
+              ensure_ascii=False,
+              indent=2,
+          )
+          PY
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
+          body_path: release-body.md
+          files: |
+            douyin-save.apk
+            latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
