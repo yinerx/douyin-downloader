@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,6 +21,14 @@ jobs:
           java-version: 17
           cache: gradle
 
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+
       - name: Require the signing secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -27,32 +36,41 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           test -n "$KEYSTORE_BASE64" || { echo "Missing repository secret KEYSTORE_BASE64"; exit 1; }
           test -n "$KEYSTORE_PASSWORD" || { echo "Missing repository secret KEYSTORE_PASSWORD"; exit 1; }
           test -n "$KEY_ALIAS" || { echo "Missing repository secret KEY_ALIAS"; exit 1; }
           test -n "$KEY_PASSWORD" || { echo "Missing repository secret KEY_PASSWORD"; exit 1; }
 
-      - name: Decode the signing key
+      - name: Decode the PKCS12 signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
           mkdir -p signing
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > signing/release.keystore
 
-      - name: Check the tag matches versionName
+      - name: Resolve the release tag
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          TAG="${TAG#V}"
+          set -euo pipefail
           NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
-          if [ "$TAG" != "$NAME" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match versionName ${NAME}."
-            echo "Bump versionName and versionCode, commit, then push a tag equal to versionName."
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$NAME"
+          else
+            STRIPPED="${GITHUB_REF_NAME#v}"
+            STRIPPED="${STRIPPED#V}"
+            if [ "$STRIPPED" != "$NAME" ]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match versionName ${NAME}."
+              echo "Push a tag equal to versionName, with an optional leading v."
+              exit 1
+            fi
+            TAG="$GITHUB_REF_NAME"
           fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build the release APK
         env:
@@ -60,21 +78,24 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_TYPE: pkcs12
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Write the release notes and latest.json
         env:
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
-          APK_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/douyin-save.apk
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          APK_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/douyin-save.apk
         run: |
+          set -euo pipefail
           cp app/build/outputs/apk/release/*.apk douyin-save.apk
-          NOTES=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" || true)
           {
-            if [ -n "$NOTES" ]; then
-              printf '%s\n\n' "$NOTES"
+            if [ -f RELEASE_NOTES.md ]; then
+              cat RELEASE_NOTES.md
+              printf '\n\n'
             fi
-            printf '版本 %s\n\nversionCode: %s\n' "$VERSION_NAME" "$VERSION_CODE"
+            printf 'versionCode: %s\n' "$VERSION_CODE"
           } > release-body.md
           python3 - << 'PY'
           import json, os
@@ -98,6 +119,7 @@ jobs:
       - name: Publish the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.name }}
           body_path: release-body.md
           files: |

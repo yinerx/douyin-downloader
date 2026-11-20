@@ -25,8 +25,8 @@ android {
         applicationId = "app.douyin.save"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 1
+        versionName = "1.0.0"
         val updateUrl = (project.findProperty("updateManifestUrl") as String?)
             ?: "https://api.github.com/repos/yinerx/douyin-downloader/releases/latest"
         buildConfigField("String", "UPDATE_URL", "\"$updateUrl\"")
@@ -34,6 +34,8 @@ android {
 
     signingConfigs {
         create("stable") {
+            // The release key is a PKCS12 store. Never leave this unset on the release build type.
+            storeType = signingValue("storeType", "KEYSTORE_TYPE") ?: "pkcs12"
             val path = signingValue("storeFile", "KEYSTORE_FILE")
             if (path != null) {
                 storeFile = rootProject.file(path)
@@ -45,18 +47,9 @@ android {
     }
 
     buildTypes {
-        getByName("debug") {
-            val stable = signingConfigs.getByName("stable")
-            if (stable.storeFile?.exists() == true) {
-                signingConfig = stable
-            }
-        }
         release {
             isMinifyEnabled = false
-            val stable = signingConfigs.getByName("stable")
-            if (stable.storeFile?.exists() == true) {
-                signingConfig = stable
-            }
+            signingConfig = signingConfigs.getByName("stable")
         }
     }
 
@@ -80,6 +73,24 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+tasks.configureEach {
+    if (name == "validateSigningRelease") {
+        doFirst {
+            val stable = android.signingConfigs.getByName("stable")
+            val store = stable.storeFile
+            val missing = store == null || !store.exists() ||
+                stable.storePassword.isNullOrBlank() ||
+                stable.keyAlias.isNullOrBlank() ||
+                stable.keyPassword.isNullOrBlank()
+            if (missing) {
+                throw GradleException(
+                    "Release builds require the PKCS12 signing key (KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD). They do not fall back to the debug key.",
+                )
+            }
+        }
     }
 }
 
