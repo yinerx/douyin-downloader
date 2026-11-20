@@ -3,33 +3,35 @@ package app.douyin.save
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.doOnPreDraw
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var pendingDownload: (() -> Unit)? = null
     private var queuedShare: String? = null
+    private var webView: WebView? = null
 
     private val storagePermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -44,14 +46,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Must run before super.onCreate so Android 12+ can hand us the splash screen.
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            WebView.setWebContentsDebuggingEnabled(true)
-        }
+        splashScreen.setKeepOnScreenCondition { false }
+        // The page is always light, so status icons stay dark even if the phone is in dark mode.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
         setContent {
-            val state by viewModel.state.collectAsStateWithLifecycle()
-            Box(Modifier.fillMaxSize()) {
+            MaterialTheme(colorScheme = lightColorScheme()) {
+                val state by viewModel.state.collectAsStateWithLifecycle()
                 HomeScreen(
                     state = state,
                     onInput = viewModel::updateInput,
@@ -60,15 +66,13 @@ class MainActivity : ComponentActivity() {
                     onDismissClipboard = viewModel::dismissClipboard,
                     onOpen = { openVideo(this@MainActivity, it) },
                 )
-                HiddenWebView(onReady = { source ->
-                    viewModel.routerSource = source
-                    window.decorView.post {
-                        val text = queuedShare ?: return@post
-                        queuedShare = null
-                        runWithStorage { viewModel.start(text) }
-                    }
-                })
             }
+        }
+        // Creating a WebView during the first frame stops the system splash screen
+        // from exiting. The activity window is then left at alpha 0, which looks like
+        // a permanent white screen. Attach the WebView only after that first draw.
+        window.decorView.doOnPreDraw {
+            window.decorView.post { attachWebView() }
         }
         handleShare(intent)
     }
@@ -79,10 +83,12 @@ class MainActivity : ComponentActivity() {
         handleShare(intent)
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (intent?.action != Intent.ACTION_SEND) {
-            readClipboard()
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Clipboard reads before the window is focused throw or block on some
+        // Android 10+ / HyperOS builds. Wait until focus, then do it off the draw pass.
+        if (hasFocus && intent?.action != Intent.ACTION_SEND) {
+            window.decorView.post { readClipboard() }
         }
     }
 
@@ -104,15 +110,45 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readClipboard() {
-        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
-        if (!clipboard.hasPrimaryClip()) return
-        val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.coerceToText(this)
-            ?.toString()
-            .orEmpty()
-        if (text.isBlank()) return
-        viewModel.offerClipboard(text)
+        if (!hasWindowFocus()) return
+        try {
+            val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+            if (!clipboard.hasPrimaryClip()) return
+            val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(this)
+                ?.toString()
+                .orEmpty()
+            if (text.isBlank()) return
+            viewModel.offerClipboard(text)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "clipboard read skipped", error)
+        }
+    }
+
+    private fun attachWebView() {
+        if (webView != null) return
+        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
+        val created = WebView(this).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        // Behind the Compose view, so a blank WebView cannot cover the UI.
+        content.addView(
+            created,
+            0,
+            FrameLayout.LayoutParams(
+                resources.displayMetrics.widthPixels.coerceAtLeast(1),
+                resources.displayMetrics.heightPixels.coerceAtLeast(1),
+            ),
+        )
+        webView = created
+        viewModel.routerSource = WebViewRouterSource(created)
+        val text = queuedShare ?: return
+        queuedShare = null
+        runWithStorage { viewModel.start(text) }
     }
 
     private fun runWithStorage(action: () -> Unit) {
@@ -129,18 +165,8 @@ class MainActivity : ComponentActivity() {
             storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
     }
-}
 
-@Composable
-private fun HiddenWebView(onReady: (WebViewRouterSource) -> Unit) {
-    AndroidView(
-        factory = { context ->
-            WebView(context).also { webView ->
-                onReady(WebViewRouterSource(webView))
-            }
-        },
-        modifier = Modifier
-            .size(width = 360.dp, height = 640.dp)
-            .offset(x = (-2400).dp),
-    )
+    companion object {
+        private const val TAG = "DouyinSave"
+    }
 }
