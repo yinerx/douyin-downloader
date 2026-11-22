@@ -19,8 +19,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,13 +51,16 @@ class MainActivity : ComponentActivity() {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         splashScreen.setKeepOnScreenCondition { false }
-        // The page is always light, so status icons stay dark even if the phone is in dark mode.
+        // Follows the system light / dark mode; re-applied from Compose when the mode changes
+        // (uiMode is in configChanges, so the activity is not recreated).
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme()) {
+            val darkTheme = isSystemInDarkTheme()
+            LaunchedEffect(darkTheme) { applySystemBars(darkTheme) }
+            DouyinSaveTheme(darkTheme = darkTheme) {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 HomeScreen(
                     state = state,
@@ -160,6 +162,15 @@ class MainActivity : ComponentActivity() {
         val text = queuedShare ?: return
         queuedShare = null
         runWithStorage { viewModel.start(text) }
+    }
+
+    private fun applySystemBars(darkTheme: Boolean) {
+        val style = if (darkTheme) {
+            SystemBarStyle.dark(Color.TRANSPARENT)
+        } else {
+            SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+        }
+        enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
     }
 
     private fun installOrAskPermission() {

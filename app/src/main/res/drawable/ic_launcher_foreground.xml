@@ -4,13 +4,24 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Arrow shaft -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M49,28h10v28h-10z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,33V58" />
+    <!-- Arrow head -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M36,54h36l-18,20z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M43,48L54,59L65,48" />
+    <!-- Tray -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M32,80h44v8h-44z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M36,62V68a6,6 0,0 0,6 6H66a6,6 0,0 0,6 -6V62" />
 </vector>
