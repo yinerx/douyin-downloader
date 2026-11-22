@@ -18,7 +18,10 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +47,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -51,6 +57,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -83,7 +97,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -112,12 +128,35 @@ internal fun HomeScreen(
     onCheckOnLaunch: (Boolean) -> Unit,
     onDownloadUpdate: () -> Unit,
     onDismissUpdate: () -> Unit,
+    onDeleteHistory: (entries: List<HistoryEntry>, withFiles: Boolean) -> Unit = { _, _ -> },
+    onNoticeShown: () -> Unit = {},
 ) {
     val busy = state.phase == Phase.Working
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var deleteRequest by remember { mutableStateOf<DeleteRequest?>(null) }
+    val snackbar = remember { SnackbarHostState() }
     val colors = MaterialTheme.colorScheme
 
-    Scaffold(containerColor = colors.background) { padding ->
+    LaunchedEffect(state.historyNotice) {
+        val notice = state.historyNotice ?: return@LaunchedEffect
+        snackbar.showSnackbar(notice, withDismissAction = true)
+        onNoticeShown()
+    }
+
+    Scaffold(
+        containerColor = colors.background,
+        snackbarHost = {
+            SnackbarHost(snackbar) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = colors.inverseSurface,
+                    contentColor = colors.inverseOnSurface,
+                    dismissActionContentColor = colors.inverseOnSurface,
+                )
+            }
+        },
+    ) { padding ->
         Box(modifier = Modifier.fillMaxSize()) {
             // A soft glow behind the header so the page does not read as a flat grey form.
             Box(
@@ -185,6 +224,12 @@ internal fun HomeScreen(
                     SectionTitle(
                         title = "下载记录",
                         count = state.history.size,
+                        working = state.historyBusy,
+                        onClearAll = if (state.history.isNotEmpty()) {
+                            { deleteRequest = DeleteRequest(state.history, clearAll = true) }
+                        } else {
+                            null
+                        },
                         modifier = Modifier.padding(top = 10.dp),
                     )
                 }
@@ -195,6 +240,11 @@ internal fun HomeScreen(
                         HistoryRow(
                             entry = entry,
                             onOpen = onOpen,
+                            onDelete = if (state.historyBusy) {
+                                null
+                            } else {
+                                { deleteRequest = DeleteRequest(listOf(entry), clearAll = false) }
+                            },
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -218,6 +268,17 @@ internal fun HomeScreen(
                 onCheckOnLaunch = onCheckOnLaunch,
             )
         }
+    }
+
+    deleteRequest?.let { request ->
+        DeleteDialog(
+            request = request,
+            onConfirm = { withFiles ->
+                deleteRequest = null
+                onDeleteHistory(request.entries, withFiles)
+            },
+            onDismiss = { deleteRequest = null },
+        )
     }
 
     val offer = state.updateOffer
@@ -612,7 +673,13 @@ private fun StatusCard(state: UiState, onOpen: (HistoryEntry) -> Unit) {
 // ───────────────────────── History ─────────────────────────
 
 @Composable
-private fun SectionTitle(title: String, count: Int, modifier: Modifier = Modifier) {
+private fun SectionTitle(
+    title: String,
+    count: Int,
+    working: Boolean,
+    onClearAll: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Icon(
             AppIcons.History,
@@ -634,27 +701,53 @@ private fun SectionTitle(title: String, count: Int, modifier: Modifier = Modifie
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
+        Spacer(Modifier.weight(1f))
+        if (working) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+            Text("正在删除…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (onClearAll != null) {
+            TextButton(
+                onClick = onClearAll,
+                contentPadding = PaddingValues(horizontal = 10.dp),
+                modifier = Modifier.height(32.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+            ) {
+                Text("清空", style = MaterialTheme.typography.labelMedium)
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onOpen: (HistoryEntry) -> Unit, modifier: Modifier = Modifier) {
+private fun HistoryRow(
+    entry: HistoryEntry,
+    onOpen: (HistoryEntry) -> Unit,
+    onDelete: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     val colors = MaterialTheme.colorScheme
     val extra = extraColors
+    val haptics = LocalHapticFeedback.current
     val openable = entry.success && entry.contentUri != null
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(colors.surfaceContainerLow)
-            .then(
-                if (openable) {
-                    Modifier.clickable(role = Role.Button, onClickLabel = "打开视频") { onOpen(entry) }
-                } else {
-                    Modifier
+            .combinedClickable(
+                role = Role.Button,
+                onClickLabel = if (openable) "打开视频" else "更多操作",
+                onLongClickLabel = "更多操作",
+                onClick = { if (openable) onOpen(entry) else menuOpen = true },
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menuOpen = true
                 },
             )
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val tileColor = if (entry.success) colors.primaryContainer else colors.errorContainer
@@ -667,10 +760,14 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: (HistoryEntry) -> Unit, modi
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (entry.success) AppIcons.Movie else AppIcons.ErrorOutline,
+                when {
+                    openable -> Icons.Filled.PlayArrow
+                    entry.success -> AppIcons.Movie
+                    else -> AppIcons.ErrorOutline
+                },
                 contentDescription = null,
                 tint = tileTint,
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size(if (openable) 26.dp else 22.dp),
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -711,16 +808,39 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: (HistoryEntry) -> Unit, modi
                 )
             }
         }
-        if (openable) {
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(colors.primary),
-                contentAlignment = Alignment.Center,
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "更多操作", tint = colors.onSurfaceVariant)
+            }
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = colors.surfaceContainerHigh,
             ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = colors.onPrimary, modifier = Modifier.size(20.dp))
+                if (openable) {
+                    DropdownMenuItem(
+                        text = { Text("打开视频") },
+                        leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onOpen(entry)
+                        },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(if (onDelete == null) "正在删除其他记录…" else "删除…") },
+                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                    enabled = onDelete != null,
+                    colors = MenuDefaults.itemColors(
+                        textColor = colors.error,
+                        leadingIconColor = colors.error,
+                    ),
+                    onClick = {
+                        menuOpen = false
+                        onDelete?.invoke()
+                    },
+                )
             }
         }
     }
@@ -789,6 +909,196 @@ private fun Footer() {
             .fillMaxWidth()
             .padding(top = 12.dp),
     )
+}
+
+// ───────────────────────── Delete ─────────────────────────
+
+internal data class DeleteRequest(val entries: List<HistoryEntry>, val clearAll: Boolean) {
+    /** Distinct gallery files behind these records; failed downloads have none. */
+    val fileCount: Int = entries.mapNotNull { it.contentUri }.distinct().size
+}
+
+@Composable
+internal fun DeleteDialog(
+    request: DeleteRequest,
+    onConfirm: (withFiles: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    initialWithFiles: Boolean = false,
+) {
+    val colors = MaterialTheme.colorScheme
+    // Safe default: keep the videos.
+    var withFiles by rememberSaveable(request) { mutableStateOf(initialWithFiles) }
+    val files = request.fileCount
+    val single = request.entries.singleOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surfaceContainerLow,
+        shape = RoundedCornerShape(28.dp),
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(colors.errorContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = null, tint = colors.error, modifier = Modifier.size(26.dp))
+            }
+        },
+        title = {
+            Text(
+                if (request.clearAll) "清空全部 ${request.entries.size} 条记录？" else "删除这条记录？",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (single != null && !request.clearAll) {
+                    Text(
+                        single.title.ifBlank { "抖音视频" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(colors.surfaceContainer)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+                if (files == 0) {
+                    Text(
+                        if (request.clearAll) "这些记录没有对应的相册文件，只会删除记录。" else "这条记录没有对应的相册文件，只会删除记录。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                } else {
+                    DeleteOption(
+                        selected = !withFiles,
+                        title = "只删记录",
+                        detail = if (files > 1) "相册里的 $files 个视频保留，仍可在相册里看到" else "相册里的视频保留，仍可在相册里看到",
+                        badge = "推荐",
+                        danger = false,
+                        onSelect = { withFiles = false },
+                    )
+                    DeleteOption(
+                        selected = withFiles,
+                        title = "记录和相册里的视频一起删",
+                        detail = if (files > 1) "同时从相册删除 $files 个视频" else "同时从相册删除这个视频",
+                        badge = null,
+                        danger = true,
+                        onSelect = { withFiles = true },
+                    )
+                    AnimatedVisibility(
+                        visible = withFiles,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(colors.errorContainer)
+                                .padding(12.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = colors.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "视频会从相册永久删除，删了就恢复不了。系统可能还会弹窗请你再确认一次。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.onErrorContainer,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(withFiles && files > 0) },
+                shape = RoundedCornerShape(14.dp),
+                colors = if (withFiles && files > 0) {
+                    ButtonDefaults.buttonColors(containerColor = colors.error, contentColor = colors.onError)
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
+            ) {
+                Text(
+                    when {
+                        withFiles && files > 0 -> "永久删除"
+                        request.clearAll -> "清空记录"
+                        else -> "删除记录"
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+@Composable
+private fun DeleteOption(
+    selected: Boolean,
+    title: String,
+    detail: String,
+    badge: String?,
+    danger: Boolean,
+    onSelect: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val accent = if (danger) colors.error else colors.primary
+    val border by animateColorAsState(if (selected) accent else colors.outlineVariant, label = "optionBorder")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(if (selected) 2.dp else 1.dp, border, RoundedCornerShape(16.dp))
+            .background(if (selected) accent.copy(alpha = 0.06f) else Color.Transparent)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors = RadioButtonDefaults.colors(selectedColor = accent),
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (danger && selected) colors.error else colors.onSurface,
+                )
+                if (badge != null) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        badge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onPrimaryContainer,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(colors.primaryContainer)
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+        }
+    }
 }
 
 // ───────────────────────── Settings & update ─────────────────────────

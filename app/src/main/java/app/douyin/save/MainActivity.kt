@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -44,6 +45,28 @@ class MainActivity : ComponentActivity() {
         } else {
             Toast.makeText(this, "需要存储权限才能保存到相册。", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private var pendingDelete: (() -> Unit)? = null
+
+    // Android 9 and below: deleting files in DCIM needs the same storage permission as saving.
+    private val deletePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val action = pendingDelete
+        pendingDelete = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            Toast.makeText(this, "需要存储权限才能删除相册里的视频，记录没有改动。", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Android 10+: the system "allow deleting this video?" dialog.
+    private val deleteConsent = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        viewModel.onDeleteConsent(result.resultCode == RESULT_OK)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,8 +97,11 @@ class MainActivity : ComponentActivity() {
                     onCheckOnLaunch = viewModel::setCheckOnLaunch,
                     onDownloadUpdate = { installOrAskPermission() },
                     onDismissUpdate = viewModel::dismissUpdate,
+                    onDeleteHistory = ::deleteHistory,
+                    onNoticeShown = viewModel::historyNoticeShown,
                 )
                 InstallUpdateEffect()
+                DeleteConsentEffect()
             }
         }
         // Creating a WebView during the first frame stops the system splash screen
@@ -195,6 +221,39 @@ class MainActivity : ComponentActivity() {
                         .onFailure { error ->
                             Toast.makeText(this@MainActivity, "无法打开安装器：${error.message}", Toast.LENGTH_LONG).show()
                         }
+                }
+            }
+        }
+    }
+
+    private fun deleteHistory(entries: List<HistoryEntry>, withFiles: Boolean) {
+        val action = { viewModel.deleteHistory(entries, withFiles) }
+        val needsPermission = withFiles &&
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            PackageManager.PERMISSION_GRANTED
+        if (needsPermission) {
+            pendingDelete = action
+            deletePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            action()
+        }
+    }
+
+    @Composable
+    private fun DeleteConsentEffect() {
+        LaunchedEffect(Unit) {
+            viewModel.consentRequests.collect { prompt ->
+                val sender = (prompt as? IntentSenderPrompt)?.sender
+                if (sender == null) {
+                    viewModel.onDeleteConsent(false)
+                    return@collect
+                }
+                try {
+                    deleteConsent.launch(IntentSenderRequest.Builder(sender).build())
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "delete consent dialog failed", error)
+                    viewModel.onDeleteConsent(false)
                 }
             }
         }
