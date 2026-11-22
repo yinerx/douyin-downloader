@@ -49,9 +49,11 @@ internal data class UiState(
     val updateOffer: RemoteUpdate? = null,
     val updateDownloading: Boolean = false,
     val updateProgress: Float? = null,
-    val historyBusy: Boolean = false,
-    val historyNotice: String? = null,
+    val historyUndo: HistoryUndo? = null,
 )
+
+/** A just-deleted batch the user can still bring back from the snackbar. */
+internal data class HistoryUndo(val id: Long, val message: String)
 
 internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val historyStore = HistoryStore(app)
@@ -72,12 +74,11 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val updater = AppUpdater(app, client)
     private val _installRequests = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val installRequests: SharedFlow<String> = _installRequests.asSharedFlow()
-    private val mediaFiles = AndroidMediaFiles(app)
-    private val _consentRequests = MutableSharedFlow<ConsentPrompt>(extraBufferCapacity = 1)
 
-    /** System dialogs the activity must show before gallery files we do not own can be deleted. */
-    val consentRequests: SharedFlow<ConsentPrompt> = _consentRequests.asSharedFlow()
-    private var deleteSession: DeleteSession? = null
+    private class DeletedBatch(val id: Long, val snapshot: List<HistoryEntry>, val removed: List<HistoryEntry>)
+
+    private var lastDeleted: DeletedBatch? = null
+    private var nextUndoId = 0L
 
     var routerSource: RouterJsonSource? = null
 
@@ -300,67 +301,49 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Deletes history [entries]; with [withFiles] also deletes their videos from the gallery. */
-    fun deleteHistory(entries: List<HistoryEntry>, withFiles: Boolean) {
-        if (entries.isEmpty() || _state.value.historyBusy) return
-        _state.update { it.copy(historyBusy = true, historyNotice = null) }
-        val session = DeleteSession(entries, withFiles, mediaFiles)
-        deleteSession = session
-        viewModelScope.launch {
-            val step = runDeleteStep { session.start() }
-            handleDeleteStep(session, step)
-        }
+    /** Removes [entries] from the in-app history only; saved videos stay in the gallery. */
+    fun deleteHistory(entries: List<HistoryEntry>) {
+        removeFromHistory(entries, if (entries.size == 1) "已删除 1 条记录" else "已删除 ${entries.size} 条记录")
     }
 
-    /** Result of the system delete dialog requested through [consentRequests]. */
-    fun onDeleteConsent(granted: Boolean) {
-        val session = deleteSession ?: return
-        viewModelScope.launch {
-            val step = runDeleteStep { session.onConsent(granted) }
-            handleDeleteStep(session, step)
-        }
+    fun clearHistory() {
+        val all = historyStore.load()
+        removeFromHistory(all, "已清空 ${all.size} 条记录")
     }
 
-    fun historyNoticeShown() {
-        _state.update { it.copy(historyNotice = null) }
+    /** Snackbar "撤销": brings back the batch [id] if it is still the latest delete. */
+    fun undoDelete(id: Long) {
+        val batch = lastDeleted?.takeIf { it.id == id } ?: return
+        lastDeleted = null
+        historyStore.restore(batch.snapshot, batch.removed)
+        _state.update { it.copy(history = historyStore.load(), historyUndo = null) }
     }
 
-    private suspend fun runDeleteStep(block: () -> DeleteStep): DeleteStep? = try {
-        withContext(Dispatchers.IO) { block() }
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: Exception) {
-        Log.w(TAG, "delete failed", error)
-        null
+    /** The snackbar for [id] went away without "撤销"; the delete is final. */
+    fun undoDismissed(id: Long) {
+        if (lastDeleted?.id == id) lastDeleted = null
+        _state.update { if (it.historyUndo?.id == id) it.copy(historyUndo = null) else it }
     }
 
-    private suspend fun handleDeleteStep(session: DeleteSession, step: DeleteStep?) {
-        if (deleteSession !== session) return
-        when (step) {
-            is DeleteStep.AskConsent -> _consentRequests.emit(step.prompt)
-            is DeleteStep.Done -> {
-                deleteSession = null
-                val result = step.result
-                withContext(Dispatchers.IO) { historyStore.remove(result.removed) }
-                _state.update { current ->
-                    // The success card plays history[0]; if that entry is gone, retire the card.
-                    val latestGone = current.history.firstOrNull()?.let { it in result.removed } == true
-                    val retire = latestGone && current.phase == Phase.Success
-                    current.copy(
-                        history = historyStore.load(),
-                        historyBusy = false,
-                        historyNotice = result.message,
-                        phase = if (retire) Phase.Idle else current.phase,
-                        status = if (retire) "" else current.status,
-                    )
-                }
-            }
-            null -> {
-                deleteSession = null
-                _state.update {
-                    it.copy(historyBusy = false, historyNotice = "删除失败，记录都还在", history = historyStore.load())
-                }
-            }
+    private fun removeFromHistory(entries: List<HistoryEntry>, message: String) {
+        if (entries.isEmpty()) return
+        val snapshot = historyStore.load()
+        val wanted = entries.toSet()
+        val removed = snapshot.filter { it in wanted }
+        if (removed.isEmpty()) return
+        historyStore.remove(removed)
+        val batch = DeletedBatch(++nextUndoId, snapshot, removed)
+        lastDeleted = batch
+        _state.update { current ->
+            // The success card plays history[0]; if that entry is gone, retire the card.
+            val latestGone = current.history.firstOrNull()?.let { it in wanted } == true
+            val retire = latestGone && current.phase == Phase.Success
+            current.copy(
+                history = historyStore.load(),
+                historyUndo = HistoryUndo(batch.id, message),
+                phase = if (retire) Phase.Idle else current.phase,
+                status = if (retire) "" else current.status,
+            )
         }
     }
 

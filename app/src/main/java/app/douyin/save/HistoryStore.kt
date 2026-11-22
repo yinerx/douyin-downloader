@@ -24,7 +24,7 @@ internal class HistoryStore(private val file: File) {
 
     fun add(entry: HistoryEntry) {
         synchronized(lock) {
-            write((listOf(entry) + read()).take(30))
+            write((listOf(entry) + read()).take(HISTORY_LIMIT))
         }
     }
 
@@ -37,6 +37,17 @@ internal class HistoryStore(private val file: File) {
             val next = current.filterNot { it in gone }
             if (next.size != current.size) write(next)
             return current.size - next.size
+        }
+    }
+
+    /**
+     * Undo for [remove]: puts [removed] back where they were in [snapshot] (the history as it
+     * was right before the delete). Entries added since then stay on top.
+     */
+    fun restore(snapshot: List<HistoryEntry>, removed: Collection<HistoryEntry>) {
+        if (removed.isEmpty()) return
+        synchronized(lock) {
+            write(restoredOrder(read(), snapshot, removed))
         }
     }
 
@@ -80,3 +91,19 @@ internal class HistoryStore(private val file: File) {
         }.getOrDefault(emptyList())
     }
 }
+
+/** Order after undoing a delete; see [HistoryStore.restore]. Capped like [HistoryStore.add]. */
+internal fun restoredOrder(
+    current: List<HistoryEntry>,
+    snapshot: List<HistoryEntry>,
+    removed: Collection<HistoryEntry>,
+): List<HistoryEntry> {
+    val present = current.toSet()
+    val returning = removed.toSet()
+    val before = snapshot.toSet()
+    val added = current.filter { it !in before }
+    val restored = snapshot.filter { it in present || it in returning }
+    return (added + restored).distinct().take(HISTORY_LIMIT)
+}
+
+internal const val HISTORY_LIMIT = 30

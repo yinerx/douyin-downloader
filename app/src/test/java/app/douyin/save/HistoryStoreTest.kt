@@ -74,4 +74,52 @@ class HistoryStoreTest {
         assertEquals(entry("35"), loaded.first())
         assertEquals(entry("6"), loaded.last())
     }
+
+    @Test
+    fun restorePutsSingleEntryBackInPlace() {
+        listOf("1", "2", "3").forEach { store.add(entry(it)) }
+        val snapshot = store.load() // 3, 2, 1
+        store.remove(listOf(entry("2")))
+        store.restore(snapshot, listOf(entry("2")))
+        assertEquals(snapshot, store.load())
+        assertEquals(snapshot, HistoryStore(file).load())
+    }
+
+    @Test
+    fun restoreAfterClearBringsEverythingBack() {
+        listOf("1", "2", "3").forEach { store.add(entry(it)) }
+        val snapshot = store.load()
+        store.remove(snapshot)
+        assertTrue(store.load().isEmpty())
+        store.restore(snapshot, snapshot)
+        assertEquals(snapshot, store.load())
+    }
+
+    @Test
+    fun restoreKeepsNewDownloadOnTop() {
+        listOf("1", "2").forEach { store.add(entry(it)) }
+        val snapshot = store.load()
+        store.remove(listOf(entry("1")))
+        store.add(entry("3"))
+        store.restore(snapshot, listOf(entry("1")))
+        assertEquals(listOf(entry("3"), entry("2"), entry("1")), store.load())
+    }
+
+    @Test
+    fun restoringTwiceDoesNotDuplicate() {
+        listOf("1", "2").forEach { store.add(entry(it)) }
+        val snapshot = store.load()
+        store.remove(listOf(entry("1")))
+        store.restore(snapshot, listOf(entry("1")))
+        store.restore(snapshot, listOf(entry("1")))
+        assertEquals(snapshot, store.load())
+    }
+
+    @Test
+    fun restoreNothingLeavesFileUntouched() {
+        store.add(entry("1"))
+        val before = file.readText()
+        store.restore(store.load(), emptyList())
+        assertEquals(before, file.readText())
+    }
 }
