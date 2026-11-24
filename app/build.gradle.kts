@@ -25,8 +25,8 @@ android {
         applicationId = "app.douyin.save"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.1.0"
         val updateUrl = (project.findProperty("updateManifestUrl") as String?)
             ?: "https://api.github.com/repos/yinerx/douyin-downloader/releases/latest"
         buildConfigField("String", "UPDATE_URL", "\"$updateUrl\"")
@@ -112,6 +112,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")

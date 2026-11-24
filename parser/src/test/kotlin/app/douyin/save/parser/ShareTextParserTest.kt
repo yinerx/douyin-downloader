@@ -76,4 +76,40 @@ class ShareTextParserTest {
         val message = expectParseError { ShareTextParser.extractUrl("看这个 https://example.com/video") }
         assertTrue(message.contains("不是抖音"))
     }
+
+    @Test
+    fun extractsXStatusLinksAndIgnoresTrackingParams() {
+        val cases = listOf(
+            "https://x.com/SpaceX/status/2121715216597827756?s=20",
+            "https://twitter.com/UltimaShadowX/status/1577719286659006464",
+            "https://mobile.twitter.com/user/status/1600649710662213632?s=21",
+            "https://www.x.com/i/web/status/2100630863679529243",
+            "https://fxtwitter.com/SpaceX/status/2121715216597827756",
+            "https://vxtwitter.com/SpaceX/status/2121715216597827756/video/1",
+        )
+        cases.forEach { url ->
+            val link = ShareTextParser.extract("看看 $url 吧")
+            assertEquals(url, link.url)
+            assertEquals(Platform.X, link.platform)
+        }
+    }
+
+    @Test
+    fun extractsBareXStatusAndShortLink() {
+        assertEquals(
+            Platform.X,
+            ShareTextParser.extract("x.com/SpaceX/status/2121715216597827756").platform,
+        )
+        val short = ShareTextParser.extract("转发 https://t.co/YJzmGUZb2B")
+        assertEquals(Platform.X, short.platform)
+        assertEquals("https://t.co/YJzmGUZb2B", short.url)
+    }
+
+    @Test
+    fun usesTheFirstSupportedLink() {
+        val text = "https://x.com/a/status/20 以及 https://v.douyin.com/J4IQiholWbo/"
+        assertEquals(Platform.X, ShareTextParser.extract(text).platform)
+        val douyinFirst = "https://v.douyin.com/J4IQiholWbo/ 以及 https://x.com/a/status/20"
+        assertEquals(Platform.DOUYIN, ShareTextParser.extract(douyinFirst).platform)
+    }
 }

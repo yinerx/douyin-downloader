@@ -29,6 +29,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- 不设 autoVerify，只出现在「打开方式」里，不会抢走 X 或浏览器的默认打开。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="x.com" android:pathPattern="/.*/status/.*" />
+                <data android:scheme="https" android:host="www.x.com" android:pathPattern="/.*/status/.*" />
+                <data android:scheme="https" android:host="mobile.x.com" android:pathPattern="/.*/status/.*" />
+                <data android:scheme="https" android:host="twitter.com" android:pathPattern="/.*/status/.*" />
+                <data android:scheme="https" android:host="www.twitter.com" android:pathPattern="/.*/status/.*" />
+                <data android:scheme="https" android:host="mobile.twitter.com" android:pathPattern="/.*/status/.*" />
+            </intent-filter>
         </activity>
         <provider
             android:name="androidx.core.content.FileProvider"

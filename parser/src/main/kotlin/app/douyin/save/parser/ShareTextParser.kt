@@ -2,7 +2,7 @@ package app.douyin.save.parser
 
 import java.net.URI
 
-/** 从抖音分享文案里取出第一条抖音链接。短链、长链、前后夹杂文字都可以。 */
+/** 从分享文案里取出第一条抖音或 X 链接。短链、长链、前后夹杂文字都可以。 */
 object ShareTextParser {
     // 只吃 URL 里合法的 ASCII，避免把紧跟在链接后面的中文一起吞进去。
     private val httpUrl = Regex(
@@ -13,25 +13,37 @@ object ShareTextParser {
         """(?<![A-Za-z0-9./])v\.douyin\.com/[A-Za-z0-9_\-]+/?""",
         RegexOption.IGNORE_CASE,
     )
+    private val bareX = Regex(
+        """(?<![A-Za-z0-9./])(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com|fixvx\.com)/[A-Za-z0-9_]+/status/\d+""",
+        RegexOption.IGNORE_CASE,
+    )
     private val trailingJunk = setOf(
         ')', ']', '}', '>', '，', '。', '！', '？', '、', '】', '）', '」',
         ',', '.', ';', ':', '!', '?',
     )
 
-    fun extractUrl(text: String): String {
+    fun extractUrl(text: String): String = extract(text).url
+
+    fun extract(text: String): SharedLink {
         val raw = text.trim()
         if (raw.isEmpty()) {
-            throw ParseException("没有内容。请粘贴抖音分享文案，或从抖音里点分享。")
+            throw ParseException("没有内容。请粘贴抖音或 X 的分享链接，或从应用里点分享。")
         }
         val found = httpUrl.findAll(raw).map { clean(it.value) }.filter { it.isNotEmpty() }.toList()
-        val douyin = found.firstOrNull { isDouyinHost(it) }
-        if (douyin != null) return douyin
-        val bare = bareShort.find(raw)?.value
-        if (bare != null) return clean("https://$bare")
+        val supported = found.mapNotNull(::linkOf)
+        if (supported.isNotEmpty()) return supported.first()
+        bareShort.find(raw)?.value?.let { return SharedLink(Platform.DOUYIN, clean("https://$it")) }
+        bareX.find(raw)?.value?.let { return SharedLink(Platform.X, clean("https://$it")) }
         if (found.isEmpty()) {
-            throw ParseException("没有找到链接。请确认文案里包含 https://v.douyin.com/ 开头的地址。")
+            throw ParseException("没有找到链接。请确认文案里包含抖音或 X 的地址。")
         }
-        throw ParseException("找到了链接，但不是抖音地址。请粘贴抖音分享文案。")
+        throw ParseException("找到了链接，但不是抖音或 X 的地址。")
+    }
+
+    private fun linkOf(url: String): SharedLink? = when {
+        isDouyinHost(url) -> SharedLink(Platform.DOUYIN, url)
+        XLinks.isHost(url) -> SharedLink(Platform.X, url)
+        else -> null
     }
 
     internal fun isDouyinHost(url: String): Boolean {

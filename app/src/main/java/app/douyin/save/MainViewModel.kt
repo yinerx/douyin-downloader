@@ -6,11 +6,16 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.douyin.save.parser.AwemeIds
+import app.douyin.save.parser.DownloadNames
 import app.douyin.save.parser.DouyinRequest
 import app.douyin.save.parser.ParseException
+import app.douyin.save.parser.Platform
 import app.douyin.save.parser.RemoteUpdate
 import app.douyin.save.parser.ShareTextParser
 import app.douyin.save.parser.VideoInfoParser
+import app.douyin.save.parser.XLinks
+import app.douyin.save.parser.XPost
+import app.douyin.save.parser.XVideo
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -31,9 +36,16 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
-internal enum class Phase { Idle, Working, Success, Error }
+internal enum class Phase { Idle, Working, Picking, Success, Error }
 
-internal data class ClipboardOffer(val rawText: String, val url: String)
+internal data class ClipboardOffer(val rawText: String, val url: String, val platform: Platform)
+
+internal data class VideoChoice(
+    val index: Int,
+    val title: String,
+    val detail: String,
+    val thumbnailUrl: String?,
+)
 
 internal data class UiState(
     val input: String = "",
@@ -50,6 +62,8 @@ internal data class UiState(
     val updateDownloading: Boolean = false,
     val updateProgress: Float? = null,
     val historyUndo: HistoryUndo? = null,
+    val choices: List<VideoChoice> = emptyList(),
+    val selected: Set<Int> = emptySet(),
 )
 
 /** A just-deleted batch the user can still bring back from the snackbar. */
@@ -69,6 +83,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         .build()
     private val linkResolver = LinkResolver(client)
     private val sharePage = HttpSharePage(client)
+    private val xClient = XClient(client)
     private val downloader = VideoDownloader(downloadClient)
     private val gallery = GallerySaver(app, downloader)
     private val updater = AppUpdater(app, client)
@@ -93,6 +108,8 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private var job: Job? = null
     private var ignoredUrl: String? = null
+    private var pendingX: XPost? = null
+    private var currentIsX = false
 
     fun updateInput(value: String) {
         _state.update { it.copy(input = value) }
@@ -100,9 +117,9 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun offerClipboard(text: String) {
         if (_state.value.phase == Phase.Working) return
-        val url = runCatching { ShareTextParser.extractUrl(text) }.getOrNull() ?: return
-        if (url == ignoredUrl) return
-        _state.update { it.copy(clipboard = ClipboardOffer(text, url)) }
+        val link = runCatching { ShareTextParser.extract(text) }.getOrNull() ?: return
+        if (link.url == ignoredUrl) return
+        _state.update { it.copy(clipboard = ClipboardOffer(text, link.url, link.platform)) }
     }
 
     fun dismissClipboard() {
@@ -121,8 +138,9 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start(text: String) {
         job?.cancel()
-        val url = runCatching { ShareTextParser.extractUrl(text) }.getOrNull()
-        ignoredUrl = url
+        pendingX = null
+        currentIsX = false
+        ignoredUrl = runCatching { ShareTextParser.extract(text).url }.getOrNull()
         _state.update {
             it.copy(
                 input = text,
@@ -130,27 +148,185 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 phase = Phase.Working,
                 status = "正在识别链接…",
                 progress = null,
+                choices = emptyList(),
+                selected = emptySet(),
             )
         }
+        launchWork { download(text) }
+    }
+
+    fun toggleChoice(index: Int) {
+        if (_state.value.phase != Phase.Picking) return
+        _state.update { state ->
+            val selected = state.selected.toMutableSet()
+            if (!selected.add(index)) selected.remove(index)
+            state.copy(selected = selected)
+        }
+    }
+
+    fun toggleAllChoices() {
+        if (_state.value.phase != Phase.Picking) return
+        _state.update { state ->
+            val all = state.choices.map { it.index }.toSet()
+            val selected = if (state.selected.size == all.size) emptySet() else all
+            state.copy(selected = selected)
+        }
+    }
+
+    fun confirmChoices() {
+        val post = pendingX ?: return
+        if (_state.value.phase != Phase.Picking) return
+        val chosen = post.videos.filter { it.index in _state.value.selected }
+        if (chosen.isEmpty()) return
+        pendingX = null
+        currentIsX = true
+        _state.update {
+            it.copy(
+                phase = Phase.Working,
+                status = "正在准备下载…",
+                progress = null,
+                choices = emptyList(),
+                selected = emptySet(),
+                clipboard = null,
+            )
+        }
+        launchWork { downloadChosen(post, chosen) }
+    }
+
+    fun dismissChoices() {
+        if (_state.value.phase != Phase.Picking) return
+        pendingX = null
+        _state.update {
+            it.copy(phase = Phase.Idle, status = "", progress = null, choices = emptyList(), selected = emptySet())
+        }
+    }
+
+    private fun launchWork(block: suspend () -> Unit) {
+        job?.cancel()
         job = viewModelScope.launch {
             try {
-                download(text)
+                block()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 if (!isActive) throw error
-                val message = userMessage(error)
+                val message = userMessage(error, currentIsX)
                 Log.w(TAG, message, error)
-                record(success = false, awemeId = "", title = text.take(40), author = "", message = message, uri = null)
+                record(
+                    success = false,
+                    awemeId = "",
+                    title = _state.value.input.take(40),
+                    author = "",
+                    message = message,
+                    uri = null,
+                    platform = if (currentIsX) "X" else "抖音",
+                )
                 _state.update {
-                    it.copy(phase = Phase.Error, status = message, progress = null, history = historyStore.load())
+                    it.copy(
+                        phase = Phase.Error,
+                        status = message,
+                        progress = null,
+                        history = historyStore.load(),
+                        choices = emptyList(),
+                        selected = emptySet(),
+                    )
                 }
             }
         }
     }
 
     private suspend fun download(text: String) {
-        val url = ShareTextParser.extractUrl(text)
+        val link = ShareTextParser.extract(text)
+        currentIsX = link.platform == Platform.X
+        when (link.platform) {
+            Platform.DOUYIN -> downloadDouyin(link.url)
+            Platform.X -> prepareX(link.url)
+        }
+    }
+
+    private suspend fun prepareX(url: String) {
+        setWorking("正在解析帖子…")
+        val post = withContext(Dispatchers.IO) { xClient.fetch(url) }
+        if (post.videos.size <= 1) {
+            downloadChosen(post, post.videos)
+            return
+        }
+        pendingX = post
+        _state.update {
+            it.copy(
+                phase = Phase.Picking,
+                status = "",
+                progress = null,
+                choices = post.videos.map { video ->
+                    VideoChoice(
+                        index = video.index,
+                        title = "第 ${video.index} 个",
+                        detail = choiceDetail(video),
+                        thumbnailUrl = video.thumbnailUrl,
+                    )
+                },
+                selected = emptySet(),
+            )
+        }
+    }
+
+    private suspend fun downloadChosen(post: XPost, videos: List<XVideo>) {
+        if (videos.isEmpty()) throw ParseException("请先选择要下载的视频。")
+        val saved = mutableListOf<String>()
+        videos.forEach { video ->
+            val prefix = if (post.videos.size > 1) "第 ${video.index} 个 · " else ""
+            setWorking("${prefix}正在选择清晰度…")
+            val chosen = withContext(Dispatchers.IO) {
+                downloader.select(
+                    video.urls,
+                    userAgent = XLinks.USER_AGENT,
+                    referer = XLinks.REFERER,
+                    emptyMessage = "视频地址无法下载。X 拒绝了请求，或链接已失效。",
+                    minBytes = 1024,
+                )
+            }
+            var lastTick = 0L
+            val uri = withContext(Dispatchers.IO) {
+                gallery.save(
+                    name = DownloadNames.xFileName(post.author, post.id, video.index, post.videos.size),
+                    source = chosen,
+                    album = "X",
+                    onProgress = { read, total ->
+                        val now = SystemClock.elapsedRealtime()
+                        val done = total > 0 && read >= total
+                        if (!done && now - lastTick < 200) return@save
+                        lastTick = now
+                        val fraction = if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else null
+                        val percent = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
+                        _state.update { it.copy(phase = Phase.Working, status = prefix + percent, progress = fraction) }
+                    },
+                    userAgent = XLinks.USER_AGENT,
+                    referer = XLinks.REFERER,
+                    minBytes = 1024,
+                )
+            }
+            saved += uri
+            record(
+                success = true,
+                awemeId = post.id,
+                title = xTitle(post, video),
+                author = post.author,
+                message = "已保存到相册",
+                uri = uri,
+                platform = "X",
+            )
+        }
+        val status = if (saved.size == 1) {
+            "已保存到相册（DCIM/X）"
+        } else {
+            "已保存 ${saved.size} 个视频到相册（DCIM/X）"
+        }
+        _state.update {
+            it.copy(phase = Phase.Success, status = status, progress = 1f, history = historyStore.load())
+        }
+    }
+
+    private suspend fun downloadDouyin(url: String) {
         setWorking("正在解析短链接…")
         val finalUrl = withContext(Dispatchers.IO) { linkResolver.resolve(url) }
         Log.i(TAG, "resolved $finalUrl")
@@ -185,15 +361,20 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         var lastTick = 0L
         val saved = withContext(Dispatchers.IO) {
-            gallery.save(video, chosen) { read, total ->
-                val now = SystemClock.elapsedRealtime()
-                val done = total > 0 && read >= total
-                if (!done && now - lastTick < 200) return@save
-                lastTick = now
-                val fraction = if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else null
-                val label = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
-                _state.update { it.copy(phase = Phase.Working, status = label, progress = fraction) }
-            }
+            gallery.save(
+                name = DownloadNames.fileName(video.title, video.awemeId),
+                source = chosen,
+                album = "Douyin",
+                onProgress = { read, total ->
+                    val now = SystemClock.elapsedRealtime()
+                    val done = total > 0 && read >= total
+                    if (!done && now - lastTick < 200) return@save
+                    lastTick = now
+                    val fraction = if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else null
+                    val label = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
+                    _state.update { it.copy(phase = Phase.Working, status = label, progress = fraction) }
+                },
+            )
         }
         record(
             success = true,
@@ -358,16 +539,18 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         author: String,
         message: String,
         uri: String?,
+        platform: String = "抖音",
     ) {
         historyStore.add(
             HistoryEntry(
                 awemeId = awemeId,
-                title = title.ifBlank { "抖音视频" },
+                title = title.ifBlank { if (platform == "X") "X 视频" else "抖音视频" },
                 author = author,
                 savedAt = System.currentTimeMillis(),
                 success = success,
                 message = message,
                 contentUri = uri,
+                platform = platform,
             ),
         )
     }
@@ -377,11 +560,42 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
-internal fun userMessage(error: Throwable): String = when (error) {
+internal fun userMessage(error: Throwable, x: Boolean = false): String = when (error) {
     is ParseException -> error.message ?: "解析失败"
-    is UnknownHostException -> "没有网络，或手机解析不了抖音域名。"
-    is SocketTimeoutException -> "连接抖音超时，请重试。"
-    is SSLException -> "和抖音的安全连接失败，请检查网络。"
+    is UnknownHostException -> if (x) "没有网络，或手机解析不了 X 的域名。" else "没有网络，或手机解析不了抖音域名。"
+    is SocketTimeoutException -> if (x) "连接 X 超时，请重试。" else "连接抖音超时，请重试。"
+    is SSLException -> if (x) "和 X 的安全连接失败，请检查网络。" else "和抖音的安全连接失败，请检查网络。"
     is IOException -> "网络中断，请重试。"
     else -> "下载失败：${error.message ?: error.javaClass.simpleName}"
+}
+
+private fun choiceDetail(video: XVideo): String {
+    val duration = video.durationMs?.let(::formatDuration)
+    return when {
+        video.kind == "gif" && duration != null -> "动图 · $duration"
+        video.kind == "gif" -> "动图"
+        duration != null -> duration
+        else -> "视频"
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    val seconds = (ms / 1000).toInt()
+    val minutes = seconds / 60
+    val rest = seconds % 60
+    return if (minutes > 0) "$minutes 分 $rest 秒" else "$rest 秒"
+}
+
+private fun xTitle(post: XPost, video: XVideo): String {
+    val headline = post.text.lineSequence().firstOrNull().orEmpty()
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(40)
+        .trim()
+    val base = when {
+        headline.isNotEmpty() -> headline
+        video.kind == "gif" -> "X 动图"
+        else -> "X 视频"
+    }
+    return if (post.videos.size > 1) "$base（第 ${video.index} 个）" else base
 }
