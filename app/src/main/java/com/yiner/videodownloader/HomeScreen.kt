@@ -14,6 +14,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -91,6 +92,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -100,7 +105,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.time.Instant
@@ -320,8 +324,14 @@ private fun Header(onOpenSettings: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 "银耳御用视频下载器",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
                 color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 "抖音和 X · 分享即存 · 只存本机相册",
@@ -344,21 +354,14 @@ private fun Header(onOpenSettings: () -> Unit) {
 
 @Composable
 private fun BrandMark(size: Dp) {
-    val extra = extraColors
-    Box(
+    Image(
+        painter = painterResource(R.drawable.ic_brand),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.3f))
-            .background(Brush.linearGradient(listOf(extra.brandStart, extra.brandEnd))),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            AppIcons.Download,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(size * 0.55f),
-        )
-    }
+            .clip(RoundedCornerShape(size * 0.22f)),
+    )
 }
 
 // ───────────────────────── Clipboard ─────────────────────────
