@@ -4,55 +4,112 @@ import app.douyin.save.parser.AwemeIds
 import app.douyin.save.parser.DouyinRequest
 import app.douyin.save.parser.ParseException
 import app.douyin.save.parser.RouterJson
+import kotlin.coroutines.cancellation.CancellationException
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.io.IOException
 import java.io.OutputStream
 
-internal class LinkResolver(private val client: OkHttpClient) {
-    fun resolve(url: String): String {
+/** Tracks the in-flight OkHttp call so 「取消」 can abort it and drop a half-written file. */
+internal class HttpCalls {
+    private val lock = Any()
+    private var active: Call? = null
+
+    fun <T> execute(
+        permit: () -> Boolean,
+        client: OkHttpClient,
+        request: Request,
+        block: (Response) -> T,
+    ): T {
+        if (!permit()) throw CancellationException("已取消")
+        val call = client.newCall(request)
+        synchronized(lock) {
+            if (!permit()) {
+                call.cancel()
+                throw CancellationException("已取消")
+            }
+            active = call
+        }
+        try {
+            return call.execute().use { response ->
+                if (!permit()) throw CancellationException("已取消")
+                block(response)
+            }
+        } catch (error: IOException) {
+            if (call.isCanceled() || !permit()) throw CancellationException("已取消", error)
+            throw error
+        } finally {
+            synchronized(lock) { if (active === call) active = null }
+        }
+    }
+
+    fun cancel() {
+        synchronized(lock) { active?.cancel() }
+    }
+}
+
+internal class LinkResolver(
+    private val client: OkHttpClient,
+    private val http: HttpCalls,
+) {
+    fun resolve(url: String, permit: () -> Boolean = { true }): String {
         if (AwemeIds.fromUrl(url) != null) return url
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", DouyinRequest.USER_AGENT)
             .build()
-        client.newCall(request).execute().use { response ->
+        return http.execute(permit, client, request) { response ->
             val finalUrl = response.request.url.toString()
             if (!response.isSuccessful && AwemeIds.fromUrl(finalUrl) == null) {
                 throw ParseException("短链接打不开（HTTP ${response.code}）。请换一条分享链接。")
             }
-            return finalUrl
+            finalUrl
         }
     }
 }
 
-internal class HttpSharePage(private val client: OkHttpClient) {
-    fun fetch(awemeId: String): String? {
+internal class HttpSharePage(
+    private val client: OkHttpClient,
+    private val http: HttpCalls,
+) {
+    fun fetch(awemeId: String, permit: () -> Boolean = { true }): String? {
         val request = Request.Builder()
             .url(DouyinRequest.iesSharePage(awemeId))
             .header("User-Agent", DouyinRequest.USER_AGENT)
             .header("Referer", DouyinRequest.REFERER)
             .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
+        return http.execute(permit, client, request) { response ->
+            if (!response.isSuccessful) return@execute null
             val html = response.body?.string().orEmpty()
-            return RouterJson.fromHtml(html)
+            RouterJson.fromHtml(html)
         }
     }
 }
 
 internal data class SelectedVideo(val url: String, val totalBytes: Long)
 
-internal class VideoDownloader(private val client: OkHttpClient) {
+internal class VideoDownloader(
+    private val client: OkHttpClient,
+    private val http: HttpCalls,
+) {
     fun select(
         urls: List<String>,
         userAgent: String = DouyinRequest.USER_AGENT,
         referer: String = DouyinRequest.REFERER,
         emptyMessage: String = "无水印地址无法下载。抖音 CDN 拒绝了请求，或播放接口已变更。",
         minBytes: Long = 16 * 1024,
+        permit: () -> Boolean = { true },
     ): SelectedVideo {
         val probes = urls.mapNotNull { url ->
-            runCatching { probe(url, userAgent, referer, minBytes) }.getOrNull()
+            try {
+                probe(url, userAgent, referer, minBytes, permit)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
         }
         return probes.maxByOrNull { it.totalBytes } ?: throw ParseException(emptyMessage)
     }
@@ -65,13 +122,14 @@ internal class VideoDownloader(private val client: OkHttpClient) {
         userAgent: String = DouyinRequest.USER_AGENT,
         referer: String = DouyinRequest.REFERER,
         minBytes: Long = 16 * 1024,
+        permit: () -> Boolean = { true },
     ) {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
             .header("Referer", referer)
             .build()
-        client.newCall(request).execute().use { response ->
+        http.execute(permit, client, request) { response ->
             if (response.code != 200 && response.code != 206) {
                 throw ParseException("下载被拒绝（HTTP ${response.code}）。")
             }
@@ -101,20 +159,26 @@ internal class VideoDownloader(private val client: OkHttpClient) {
         }
     }
 
-    private fun probe(url: String, userAgent: String, referer: String, minBytes: Long): SelectedVideo? {
+    private fun probe(
+        url: String,
+        userAgent: String,
+        referer: String,
+        minBytes: Long,
+        permit: () -> Boolean,
+    ): SelectedVideo? {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
             .header("Referer", referer)
             .header("Range", "bytes=0-31")
             .build()
-        client.newCall(request).execute().use { response ->
-            if (response.code != 200 && response.code != 206) return null
-            val bytes = response.body?.bytes() ?: return null
-            if (!isFtyp(bytes, bytes.size)) return null
-            val total = totalBytes(response) ?: return null
-            if (total < minBytes) return null
-            return SelectedVideo(url, total)
+        return http.execute(permit, client, request) { response ->
+            if (response.code != 200 && response.code != 206) return@execute null
+            val bytes = response.body?.bytes() ?: return@execute null
+            if (!isFtyp(bytes, bytes.size)) return@execute null
+            val total = totalBytes(response) ?: return@execute null
+            if (total < minBytes) return@execute null
+            SelectedVideo(url, total)
         }
     }
 
