@@ -94,6 +94,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.StrokeCap
@@ -323,7 +324,7 @@ private fun Header(onOpenSettings: () -> Unit) {
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                "银耳御用视频下载器",
+                stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -800,7 +801,7 @@ private fun EmptyHistory() {
             )
         }
         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            HowToStep(icon = AppIcons.Share, text = "在抖音或 X 里点「分享」，选择「银耳御用视频下载器」")
+            HowToStep(icon = AppIcons.Share, text = "在抖音或 X 里点「分享」，选择「${stringResource(R.string.app_name)}」")
             HowToStep(icon = AppIcons.Link, text = "复制链接后打开本应用，会自动识别")
         }
     }
