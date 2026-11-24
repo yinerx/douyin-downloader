@@ -18,15 +18,15 @@ fun signingValue(property: String, env: String): String? {
 }
 
 android {
-    namespace = "app.douyin.save"
+    namespace = "com.yiner.videodownloader"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.douyin.save"
+        applicationId = "com.yiner.videodownloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.1.3"
+        versionCode = 8
+        versionName = "1.2.0"
         val updateUrl = (project.findProperty("updateManifestUrl") as String?)
             ?: "https://github.com/yinerx/douyin-downloader/releases/latest/download/latest.json"
         buildConfigField("String", "UPDATE_URL", "\"$updateUrl\"")
