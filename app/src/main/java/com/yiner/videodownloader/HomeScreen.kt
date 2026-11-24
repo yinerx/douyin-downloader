@@ -335,9 +335,12 @@ private fun Header(onOpenSettings: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "抖音和 X · 分享即存 · 只存本机相册",
+                "抖音和 X · 分享即存",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         IconButton(
