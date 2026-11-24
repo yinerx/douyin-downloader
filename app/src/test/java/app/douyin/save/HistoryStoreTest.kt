@@ -27,6 +27,16 @@ class HistoryStoreTest {
     }
 
     @Test
+    fun missingPlatformReadsAsDouyinAndXRoundTrips() {
+        file.writeText(
+            """[{"awemeId":"1","title":"旧记录","author":"甲","savedAt":1,"success":true,"message":"已保存到相册","contentUri":"content://old"}]""",
+        )
+        assertEquals("抖音", store.load().single().platform)
+        store.add(entry("2").copy(platform = "X"))
+        assertEquals(listOf("X", "抖音"), HistoryStore(file).load().map { it.platform })
+    }
+
+    @Test
     fun removeDropsOnlyMatchingEntriesAndKeepsOrder() {
         listOf("1", "2", "3", "4").forEach { store.add(entry(it)) }
         assertEquals(2, store.remove(listOf(entry("2"), entry("4"))))

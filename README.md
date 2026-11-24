@@ -1,6 +1,8 @@
 # 抖音无水印
 
-个人自用的 Android 应用。从抖音分享里保存**没有抖音角标、没有片尾引流卡**的视频，写进手机相册。侧载到自己的手机即可，不打算上架应用商店。
+个人自用的 Android 应用。从抖音分享里保存**没有抖音角标、没有片尾引流卡**的视频，也可以保存 X（Twitter）公开帖子里的视频和动图，写进手机相册。侧载到自己的手机即可，不打算上架应用商店。
+
+应用名仍是「抖音无水印」。分享面板里看到的也是这个名字，这样不用改已经打开过的分享目标。界面里会写明它同时处理抖音和 X。
 
 只处理你自己能打开的公开分享链接。请只保存你有权留存的内容，不要把别人的作品再发出去。
 
@@ -16,11 +18,20 @@
 
 如果分享面板里没有本应用：点「更多」或分享面板的编辑按钮，把「抖音无水印」打开。小米的分享面板有时要滑到底。
 
+### 从 X 分享
+
+1. 在 X 里打开带视频或动图的帖子，点分享，选「抖音无水印」。
+2. 链接可以是 `x.com`、`twitter.com`、`mobile.twitter.com`，也可以是 `t.co`、`fxtwitter.com`、`vxtwitter.com`。后面的 `?s=...` 之类参数不用删。
+3. 帖子里只有一个视频（动图也算，X 用 MP4 提供）时，直接下载画质最高的那一档。
+4. 有多个视频时，会列出每一个的预览图、序号（第 1 个、第 2 个）和时长。勾选要保存的，或点「全选」，再点「下载所选」。什么都不选就不会开始下载。
+
+不需要登录 X。私密账号、已删除的帖子，以及没有视频的帖子，会用中文说明原因。
+
 ### 从剪贴板
 
-1. 在抖音里点「复制链接」。文案里通常夹着 `https://v.douyin.com/xxxx/`，前后可以有别的字。
-2. 打开本应用。它会读剪贴板，认出抖音链接后问你要不要下载。
-3. 点「下载」。点「忽略」则这次不再提示同一条链接。
+1. 在抖音里点「复制链接」，或在 X 里复制帖子链接。文案前后可以有别的字。
+2. 打开本应用。它会读剪贴板，认出抖音或 X 的链接后问你要不要下载。
+3. 点「下载」。点「忽略」则这次不再提示同一条链接。X 的多视频帖子同样会先让你勾选。
 
 Android 12 及以上在应用读取剪贴板时会弹出系统提示，这是系统行为，不是故障。
 
@@ -30,7 +41,11 @@ Android 12 及以上在应用读取剪贴板时会弹出系统提示，这是系
 
 ### 文件在哪
 
-视频保存到相册的 `DCIM/Douyin`，文件名是「标题_作品编号.mp4」。系统相册和 Google 相册一般会在「视频」里看到它。小米相册如果没立刻出现，下拉刷新，或到「文件管理 → DCIM → Douyin」查看。下载记录在应用里，点「打开视频」用系统播放器打开。
+抖音视频保存到相册的 `DCIM/Douyin`，文件名是「标题_作品编号.mp4」。
+
+X 的视频保存到 `DCIM/X`，文件名是「作者_帖子ID.mp4」。同一条帖子里的第 2 个、第 3 个视频会加上 `_2`、`_3`。动图也存成 MP4。
+
+系统相册和 Google 相册一般会在「视频」里看到它们。小米相册如果没立刻出现，下拉刷新，或到「文件管理 → DCIM」查看对应文件夹。下载记录在应用里，每条前面有「抖音」或「X」。点「打开视频」用系统播放器打开。
 
 ## 编译
 
@@ -115,8 +130,8 @@ https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
 
 ```json
 {
-  "versionCode": 3,
-  "versionName": "1.0.2",
+  "versionCode": 4,
+  "versionName": "1.1.0",
   "changelog": "写给自己看的说明",
   "apkUrl": "https://example.com/douyin-save.apk"
 }
@@ -150,6 +165,30 @@ https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
 
 作者自己烧在画面里的字幕、台标不会去掉。应用去掉的是抖音加上的角标和片尾。
 
+## X 的解析（2026-11-24 实测）
+
+公开帖子不登录、也不使用用户 token。按这个顺序试，前一个成功就不再请求后面的：
+
+1. `https://cdn.syndication.twimg.com/tweet-result?id={帖子编号}&lang=en&token={token}`。这是 X 嵌入页用的公开接口。`token` 与嵌入脚本相同：把帖子编号按 JavaScript 的 `Number` 转成浮点，乘 `π / 1e15`，用 36 进制表示，再去掉 `0` 和小数点。不带 token 时返回空对象 `{}`。
+2. `https://api.fxtwitter.com/status/{帖子编号}`
+3. `https://api.vxtwitter.com/status/{帖子编号}`
+
+两个镜像的 JSON 形状一样。只在嵌入接口被限流、返回 5xx，或正文无法解析时才用。帖子已删除、受保护，或确实没有视频时，不再换接口。
+
+视频地址在 `mediaDetails[].video_info.variants`（镜像则在 `tweet.media.videos[].variants`）。只留 `video/mp4`，丢掉 `.m3u8`，取得码率最高的一条。动图的类型是 `animated_gif`，通常只有一条码率为 0 的 MP4，地址在 `video.twimg.com/tweet_video/`。一条帖子里的多段视频都在 `mediaDetails` 里；顶层的 `video` 往往只有第一段，而且不带码率，所以有 `mediaDetails` 时以它为准。
+
+当天从这台环境直接请求并核对过：
+
+| 帖子 | 结果 |
+| --- | --- |
+| `https://x.com/SpaceX/status/2121715216597827756` | 嵌入接口返回 5 档 MP4。最高 3840×2160、码率 25128000。下载文件 110014999 字节，`ftypisom`，约 92.8 秒，H.264 + AAC |
+| `https://twitter.com/UltimaShadowX/status/1577719286659006464` | 4 段视频，每段都能选出最高码率 MP4。其中一段 1280×720 的成片约 4.3 秒，可播放 |
+| `https://x.com/ChromiumDev/status/2100630863679529243` | 动图，`video.twimg.com/tweet_video/HSbkx59W0AENuVq.mp4`，960×540，约 3.4 秒，无音轨 |
+| 已删除的帖子 | `__typename` 为 `TweetTombstone`，正文类似 “This Post was deleted by the Post author” |
+| `https://t.co/YJzmGUZb2B` | 301 到 `twitter.com/SpaceX/status/2121715216597827756/video/1`，编号仍能取出 |
+
+访客 token 的 GraphQL `TweetResultByRestId` 也能读公开帖，但查询编号经常变，这次没有用。镜像在数据中心 IP 上有时会被挡住；手机上作为备用仍然保留。
+
 ## 失效了怎么改
 
 改动集中在 `parser/src/main/kotlin/app/douyin/save/parser/`。改完跑 `./gradlew :parser:test`。
@@ -161,14 +200,17 @@ https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
 5. 短链不再 302：看 `app` 模块的 `LinkResolver`。作品编号的新位置：改 `AwemeIds`。
 6. 分享页必须登录或出验证码：这版没有登录态，只能提示失败。不要把账号 cookie 写进仓库。
 
+X 这边改 `parser/src/main/kotlin/app/douyin/save/parser/XLinks.kt` 和 `XPostParser.kt`。链接认不出：改 `XLinks.statusId` 和 `ShareTextParser`。嵌入接口的字段变了：改 `XPostParser`。用 `curl` 打开 `cdn.syndication.twimg.com/tweet-result?id=编号&lang=en&token=算出来的token`，确认 `mediaDetails` 里还有 `video/mp4`。下载被拒时看 `app` 模块的 `XClient`，不要把账号 cookie 写进仓库。
+
 ## 隐私
 
-链接只发给抖音自己的域名，用来取这一条视频。应用不上传到其他服务器，也不带登录。下载记录存在应用私有目录的 `history.json`。
+抖音链接只发给抖音自己的域名。X 的链接先发给 `cdn.syndication.twimg.com`，视频文件从 `video.twimg.com` 下载，预览图来自 `pbs.twimg.com`。只有嵌入接口失败时，才会把帖子编号发给 `api.fxtwitter.com`，仍失败再试 `api.vxtwitter.com`。应用不带登录。下载记录存在应用私有目录的 `history.json`。
 
 ## 限制
 
-- 只下载视频。图文、合集链接会提示不支持。
-- 私密、已删除、或被风控拦住的作品会失败，并在界面上说明。
+- 抖音只下载视频。图文、合集链接会提示不支持。X 只下载视频和动图，纯文字或只有图片的帖子会提示没有视频。
+- 一条 X 帖子有多个视频时，必须勾选后才下载。
+- 私密、已删除、或被风控拦住的作品会失败，并在界面上说明。X 被限流时也会说明，并先尝试备用接口。
 - 播放地址会过期，所以每次下载都重新解析，不把地址存下来。
 - 下载过程中请留在应用里。滑掉应用会中断这一次。
 - 隐藏的 WebView 要等第一帧画完再创建。Android 12 及以上如果在第一帧里就创建 WebView，系统启动画面不会退出，窗口透明度会停在 0，看起来就是一直白屏，进程却还活着。

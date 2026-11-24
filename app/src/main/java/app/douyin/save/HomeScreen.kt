@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import app.douyin.save.parser.Platform
 import app.douyin.save.parser.RemoteUpdate
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -132,6 +133,10 @@ internal fun HomeScreen(
     onClearHistory: () -> Unit = {},
     onUndoDelete: (Long) -> Unit = {},
     onUndoDismissed: (Long) -> Unit = {},
+    onToggleChoice: (Int) -> Unit = {},
+    onToggleAllChoices: () -> Unit = {},
+    onConfirmChoices: () -> Unit = {},
+    onDismissChoices: () -> Unit = {},
 ) {
     val busy = state.phase == Phase.Working
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -197,6 +202,7 @@ internal fun HomeScreen(
                     ) {
                         val offer = lastOffer[0] ?: return@AnimatedVisibility
                         ClipboardCard(
+                            title = if (offer.platform == Platform.X) "发现剪贴板里的 X 链接" else "发现剪贴板里的抖音链接",
                             url = offer.url,
                             enabled = !busy,
                             onDownload = onDownloadClipboard,
@@ -235,7 +241,7 @@ internal fun HomeScreen(
                 if (state.history.isEmpty()) {
                     item(key = "history-empty") { EmptyHistory() }
                 } else {
-                    items(state.history, key = { "${it.savedAt}-${it.awemeId}-${it.success}" }) { entry ->
+                    items(state.history, key = { "${it.savedAt}-${it.awemeId}-${it.title}-${it.contentUri}" }) { entry ->
                         HistoryRow(
                             entry = entry,
                             onOpen = onOpen,
@@ -265,10 +271,21 @@ internal fun HomeScreen(
         }
     }
 
+    if (state.phase == Phase.Picking && state.choices.isNotEmpty()) {
+        VideoPickerSheet(
+            choices = state.choices,
+            selected = state.selected,
+            onToggle = onToggleChoice,
+            onToggleAll = onToggleAllChoices,
+            onConfirm = onConfirmChoices,
+            onDismiss = onDismissChoices,
+        )
+    }
+
     val offer = state.updateOffer
     // A found update takes over from the settings sheet.
-    LaunchedEffect(offer != null) {
-        if (offer != null) showSettings = false
+    LaunchedEffect(offer != null, state.phase) {
+        if (offer != null || state.phase == Phase.Picking) showSettings = false
     }
     if (offer != null) {
         UpdateDialog(
@@ -301,7 +318,7 @@ private fun Header(onOpenSettings: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                "分享即存 · 无水印 · 只存本机相册",
+                "抖音和 X · 分享即存 · 只存本机相册",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -342,6 +359,7 @@ private fun BrandMark(size: Dp) {
 
 @Composable
 private fun ClipboardCard(
+    title: String,
     url: String,
     enabled: Boolean,
     onDownload: () -> Unit,
@@ -368,7 +386,7 @@ private fun ClipboardCard(
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("发现剪贴板里的抖音链接", style = MaterialTheme.typography.titleMedium, color = Color.White)
+                Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
                 Text(
                     url,
                     style = MaterialTheme.typography.bodySmall,
@@ -458,7 +476,7 @@ private fun InputCard(
             enabled = !busy,
             placeholder = {
                 Text(
-                    "粘贴抖音分享文案，或 https://v.douyin.com/…",
+                    "粘贴抖音或 X 的分享链接",
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             },
@@ -751,13 +769,26 @@ private fun HistoryRow(
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                entry.title.ifBlank { "抖音视频" },
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    entry.platform.ifBlank { "抖音" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onPrimaryContainer,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.primaryContainer)
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    entry.title.ifBlank { "视频" },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             val meta = listOf(entry.author, formatTime(entry.savedAt))
                 .filter { it.isNotBlank() }
                 .joinToString(" · ")
@@ -854,7 +885,7 @@ private fun EmptyHistory() {
             )
         }
         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            HowToStep(icon = AppIcons.Share, text = "在抖音里点「分享」，选择「抖音无水印」")
+            HowToStep(icon = AppIcons.Share, text = "在抖音或 X 里点「分享」，选择「抖音无水印」")
             HowToStep(icon = AppIcons.Link, text = "复制链接后打开本应用，会自动识别")
         }
     }
@@ -879,7 +910,7 @@ private fun HowToStep(icon: ImageVector, text: String) {
 @Composable
 private fun Footer() {
     Text(
-        "视频保存在 DCIM/Douyin · v${BuildConfig.VERSION_NAME}",
+        "抖音在 DCIM/Douyin，X 在 DCIM/X · v${BuildConfig.VERSION_NAME}",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
         textAlign = TextAlign.Center,

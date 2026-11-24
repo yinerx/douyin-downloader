@@ -13,6 +13,7 @@ internal data class HistoryEntry(
     val success: Boolean,
     val message: String,
     val contentUri: String?,
+    val platform: String = "抖音",
 )
 
 internal class HistoryStore(private val file: File) {
@@ -62,7 +63,8 @@ internal class HistoryStore(private val file: File) {
                     .put("savedAt", item.savedAt)
                     .put("success", item.success)
                     .put("message", item.message)
-                    .put("contentUri", item.contentUri ?: ""),
+                    .put("contentUri", item.contentUri ?: "")
+                    .put("platform", item.platform),
             )
         }
         file.writeText(array.toString(2))
@@ -84,6 +86,7 @@ internal class HistoryStore(private val file: File) {
                             success = item.optBoolean("success"),
                             message = item.optString("message"),
                             contentUri = item.optString("contentUri").takeIf { it.isNotBlank() },
+                            platform = item.optString("platform").ifBlank { "抖音" },
                         ),
                     )
                 }

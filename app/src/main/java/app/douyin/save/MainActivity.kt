@@ -78,6 +78,10 @@ class MainActivity : ComponentActivity() {
                     onClearHistory = viewModel::clearHistory,
                     onUndoDelete = viewModel::undoDelete,
                     onUndoDismissed = viewModel::undoDismissed,
+                    onToggleChoice = viewModel::toggleChoice,
+                    onToggleAllChoices = viewModel::toggleAllChoices,
+                    onConfirmChoices = { runWithStorage { viewModel.confirmChoices() } },
+                    onDismissChoices = viewModel::dismissChoices,
                 )
                 InstallUpdateEffect()
             }
@@ -91,13 +95,13 @@ class MainActivity : ComponentActivity() {
                 viewModel.checkForUpdate(manual = false)
             }
         }
-        handleShare(intent)
+        handleIncoming(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleShare(intent)
+        handleIncoming(intent)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -109,11 +113,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleShare(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_SEND) return
-        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
-            ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+    private fun handleIncoming(intent: Intent?) {
+        val text = when (intent?.action) {
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+                ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+            Intent.ACTION_VIEW -> intent.dataString?.takeIf { it.isNotBlank() }
+            else -> return
+        }
         intent.action = Intent.ACTION_MAIN
+        intent.data = null
         intent.removeExtra(Intent.EXTRA_TEXT)
         if (text.isNullOrBlank()) {
             Toast.makeText(this, "分享内容里没有文字链接。", Toast.LENGTH_SHORT).show()

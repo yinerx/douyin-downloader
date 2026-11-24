@@ -44,19 +44,32 @@ internal class HttpSharePage(private val client: OkHttpClient) {
 internal data class SelectedVideo(val url: String, val totalBytes: Long)
 
 internal class VideoDownloader(private val client: OkHttpClient) {
-    fun select(urls: List<String>): SelectedVideo {
+    fun select(
+        urls: List<String>,
+        userAgent: String = DouyinRequest.USER_AGENT,
+        referer: String = DouyinRequest.REFERER,
+        emptyMessage: String = "无水印地址无法下载。抖音 CDN 拒绝了请求，或播放接口已变更。",
+        minBytes: Long = 16 * 1024,
+    ): SelectedVideo {
         val probes = urls.mapNotNull { url ->
-            runCatching { probe(url) }.getOrNull()
+            runCatching { probe(url, userAgent, referer, minBytes) }.getOrNull()
         }
-        return probes.maxByOrNull { it.totalBytes }
-            ?: throw ParseException("无水印地址无法下载。抖音 CDN 拒绝了请求，或播放接口已变更。")
+        return probes.maxByOrNull { it.totalBytes } ?: throw ParseException(emptyMessage)
     }
 
-    fun write(url: String, output: OutputStream, totalHint: Long, onProgress: (Long, Long) -> Unit) {
+    fun write(
+        url: String,
+        output: OutputStream,
+        totalHint: Long,
+        onProgress: (Long, Long) -> Unit,
+        userAgent: String = DouyinRequest.USER_AGENT,
+        referer: String = DouyinRequest.REFERER,
+        minBytes: Long = 16 * 1024,
+    ) {
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", DouyinRequest.USER_AGENT)
-            .header("Referer", DouyinRequest.REFERER)
+            .header("User-Agent", userAgent)
+            .header("Referer", referer)
             .build()
         client.newCall(request).execute().use { response ->
             if (response.code != 200 && response.code != 206) {
@@ -81,18 +94,18 @@ internal class VideoDownloader(private val client: OkHttpClient) {
                     readTotal += count
                     onProgress(readTotal, total)
                 }
-                if (readTotal < 16 * 1024) {
+                if (readTotal < minBytes) {
                     throw ParseException("下载到的文件太小，可能不是完整视频。")
                 }
             }
         }
     }
 
-    private fun probe(url: String): SelectedVideo? {
+    private fun probe(url: String, userAgent: String, referer: String, minBytes: Long): SelectedVideo? {
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", DouyinRequest.USER_AGENT)
-            .header("Referer", DouyinRequest.REFERER)
+            .header("User-Agent", userAgent)
+            .header("Referer", referer)
             .header("Range", "bytes=0-31")
             .build()
         client.newCall(request).execute().use { response ->
@@ -100,7 +113,7 @@ internal class VideoDownloader(private val client: OkHttpClient) {
             val bytes = response.body?.bytes() ?: return null
             if (!isFtyp(bytes, bytes.size)) return null
             val total = totalBytes(response) ?: return null
-            if (total < 16 * 1024) return null
+            if (total < minBytes) return null
             return SelectedVideo(url, total)
         }
     }
