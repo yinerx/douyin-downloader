@@ -22,7 +22,7 @@ class UpdateManifestTest {
         assertEquals(5, update.versionCode)
         assertEquals("1.2.0", update.versionName)
         assertEquals("修复白屏", update.changelog)
-        assertTrue(update.apkUrl.endsWith("douyin-save.apk"))
+        assertTrue(update.downloadUrl.endsWith("douyin-save.apk"))
         assertTrue(UpdateManifests.isNewerThan(update, 2, "1.0.1"))
         assertFalse(UpdateManifests.isNewerThan(update, 5, "1.2.0"))
     }
@@ -31,7 +31,7 @@ class UpdateManifestTest {
     fun parsesPlainManifest() {
         val update = UpdateManifests.parse(
             """
-            {"versionCode":3,"versionName":"1.0.2","changelog":"说明","apkUrl":"https://example.com/a.apk"}
+            {"versionCode":3,"versionName":"1.0.2","changelog":"说明","downloadUrl":"https://example.com/a.apk"}
             """.trimIndent(),
         )
         assertEquals(3, update.versionCode)
@@ -70,9 +70,31 @@ class UpdateManifestTest {
         )
         assertEquals(5, update.versionCode)
         assertEquals("1.1.1", update.versionName)
-        assertTrue(update.apkUrl.endsWith("/douyin-save.apk"))
+        assertEquals(
+            "https://github.com/yinerx/douyin-downloader/releases/download/1.1.1/douyin-save.apk",
+            update.downloadUrl,
+        )
         assertTrue(UpdateManifests.isNewerThan(update, 4, "1.1.0"))
         assertFalse(UpdateManifests.isNewerThan(update, 5, "1.1.1"))
+    }
+
+    @Test
+    fun prefersDownloadUrlAndStillReadsLegacyApkUrl() {
+        val both = UpdateManifests.parse(
+            """
+            {"versionCode":7,"versionName":"1.1.3","downloadUrl":"https://example.com/new.apk","apkUrl":"https://example.com/old.apk"}
+            """.trimIndent(),
+        )
+        assertEquals("https://example.com/new.apk", both.downloadUrl)
+        val legacy = UpdateManifests.parse(
+            """
+            {"versionCode":6,"versionName":"1.1.2","apkUrl":"https://example.com/legacy.apk"}
+            """.trimIndent(),
+        )
+        assertEquals("https://example.com/legacy.apk", legacy.downloadUrl)
+        assertTrue(expectParseError {
+            UpdateManifests.parse("""{"versionCode":1,"versionName":"1.0.0"}""")
+        }.contains("downloadUrl"))
     }
 
     @Test

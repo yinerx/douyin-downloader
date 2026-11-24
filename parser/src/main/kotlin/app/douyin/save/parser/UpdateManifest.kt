@@ -27,13 +27,13 @@ data class RemoteUpdate(
     val versionCode: Int,
     val versionName: String,
     val changelog: String,
-    val apkUrl: String,
+    val downloadUrl: String,
 )
 
 /**
  * 两种输入都能认：
- * - GitHub Release API（`/releases/latest`）：tag 是版本名，正文里写 `versionCode: 数字`，附件里有 apk
- * - 自己托管的 JSON：`versionCode`、`versionName`、`changelog`、`apkUrl`
+ * - GitHub Release API（`/releases/latest`）：tag 是版本名，正文里写 `versionCode: 数字`，附件里有安装包
+ * - 自己托管的 JSON：`versionCode`、`versionName`、`changelog`、`downloadUrl`（没有时仍认旧的 `apkUrl`）
  */
 object UpdateManifests {
     private val json = Json { ignoreUnknownKeys = true }
@@ -47,14 +47,14 @@ object UpdateManifests {
         } ?: throw ParseException("更新信息不是 JSON。")
         val remote = when {
             root.containsKey("tag_name") || root.containsKey("assets") -> fromGitHub(root)
-            root.containsKey("apkUrl") || root.containsKey("versionCode") -> fromPlain(root)
+            root.containsKey("downloadUrl") || root.containsKey("apkUrl") || root.containsKey("versionCode") -> fromPlain(root)
             else -> {
                 val message = root.text("message")
                 if (message != null) throw ParseException("检查更新失败：$message")
                 throw ParseException("更新信息格式无法识别。")
             }
         }
-        if (!remote.apkUrl.startsWith("https://")) {
+        if (!remote.downloadUrl.startsWith("https://")) {
             throw ParseException("更新包地址不是 https 链接。")
         }
         return remote
@@ -94,19 +94,20 @@ object UpdateManifests {
             versionCode = code,
             versionName = tag.removePrefix("v").removePrefix("V"),
             changelog = changelog.ifBlank { tag },
-            apkUrl = apk,
+            downloadUrl = apk,
         )
     }
 
     private fun fromPlain(root: JsonObject): RemoteUpdate {
         val code = root.int("versionCode") ?: throw ParseException("更新信息缺少 versionCode。")
         val name = root.text("versionName") ?: throw ParseException("更新信息缺少 versionName。")
-        val url = root.text("apkUrl") ?: throw ParseException("更新信息缺少 apkUrl。")
+        val url = root.text("downloadUrl") ?: root.text("apkUrl")
+            ?: throw ParseException("更新信息缺少 downloadUrl。")
         return RemoteUpdate(
             versionCode = code,
             versionName = name.removePrefix("v").removePrefix("V"),
             changelog = root.text("changelog").orEmpty().ifBlank { name },
-            apkUrl = url,
+            downloadUrl = url,
         )
     }
 
