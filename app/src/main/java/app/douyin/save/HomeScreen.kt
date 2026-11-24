@@ -7,16 +7,13 @@ import android.net.Uri
 import android.widget.Toast
 import app.douyin.save.parser.Platform
 import app.douyin.save.parser.RemoteUpdate
-import androidx.compose.animation.AnimatedContent
+import android.content.ClipData
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -137,6 +134,12 @@ internal fun HomeScreen(
     onToggleAllChoices: () -> Unit = {},
     onConfirmChoices: () -> Unit = {},
     onDismissChoices: () -> Unit = {},
+    onCancelDownload: () -> Unit = {},
+    onHideDownload: () -> Unit = {},
+    onShowDownload: () -> Unit = {},
+    onDismissResult: () -> Unit = {},
+    onRetryDownload: () -> Unit = {},
+    onShare: (List<HistoryEntry>) -> Unit = {},
 ) {
     val busy = state.phase == Phase.Working
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -218,16 +221,9 @@ internal fun HomeScreen(
                         onDownload = onDownloadInput,
                     )
                 }
-                item(key = "status") {
-                    AnimatedVisibility(
-                        visible = state.phase != Phase.Idle && state.status.isNotBlank(),
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically(),
-                    ) {
-                        StatusCard(
-                            state = state,
-                            onOpen = onOpen,
-                        )
+                if (state.phase == Phase.Working && state.dialogHidden) {
+                    item(key = "background-download") {
+                        BackgroundDownloadChip(status = state.status, onClick = onShowDownload)
                     }
                 }
                 item(key = "history-title") {
@@ -270,6 +266,16 @@ internal fun HomeScreen(
             )
         }
     }
+
+    DownloadDialog(
+        state = state,
+        onCancel = onCancelDownload,
+        onHide = onHideDownload,
+        onPlay = onOpen,
+        onShare = onShare,
+        onRetry = onRetryDownload,
+        onClose = onDismissResult,
+    )
 
     if (state.phase == Phase.Picking && state.choices.isNotEmpty()) {
         VideoPickerSheet(
@@ -548,127 +554,33 @@ private fun PrimaryButton(text: String, busy: Boolean, enabled: Boolean, onClick
     }
 }
 
-// ───────────────────────── Status ─────────────────────────
-
 @Composable
-private fun StatusCard(state: UiState, onOpen: (HistoryEntry) -> Unit) {
+private fun BackgroundDownloadChip(status: String, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    val extra = extraColors
-    val container by animateColorAsState(
-        when (state.phase) {
-            Phase.Success -> extra.successContainer
-            Phase.Error -> colors.errorContainer
-            else -> colors.surfaceContainerLow
-        },
-        label = "statusContainer",
-    )
-    val accent = when (state.phase) {
-        Phase.Success -> extra.success
-        Phase.Error -> colors.error
-        else -> colors.primary
-    }
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(CardShape)
-            .background(container)
-            .border(1.dp, accent.copy(alpha = 0.16f), CardShape)
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.primaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AnimatedContent(
-                targetState = state.phase,
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) },
-                label = "statusIcon",
-            ) { phase ->
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(accent.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    when (phase) {
-                        Phase.Success -> Icon(Icons.Filled.CheckCircle, null, tint = accent, modifier = Modifier.size(24.dp))
-                        Phase.Error -> Icon(AppIcons.ErrorOutline, null, tint = accent, modifier = Modifier.size(24.dp))
-                        else -> CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = accent,
-                            trackColor = accent.copy(alpha = 0.18f),
-                            strokeCap = StrokeCap.Round,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                val title = when (state.phase) {
-                    Phase.Success -> "下载完成"
-                    Phase.Error -> "没能下载"
-                    else -> "正在处理"
-                }
-                Text(title, style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
-                Text(
-                    state.status,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = when (state.phase) {
-                        Phase.Error -> colors.onErrorContainer
-                        Phase.Success -> extra.onSuccessContainer
-                        else -> colors.onSurfaceVariant
-                    },
-                )
-            }
-        }
-        if (state.phase == Phase.Working) {
-            val progress = state.progress
-            if (progress == null) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(CircleShape),
-                    color = accent,
-                    trackColor = accent.copy(alpha = 0.14f),
-                    strokeCap = StrokeCap.Round,
-                )
-            } else {
-                val animated by animateFloatAsState(progress, label = "downloadProgress")
-                LinearProgressIndicator(
-                    progress = { animated },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(CircleShape),
-                    color = accent,
-                    trackColor = accent.copy(alpha = 0.14f),
-                    strokeCap = StrokeCap.Round,
-                    drawStopIndicator = {},
-                )
-            }
-        }
-        if (state.phase == Phase.Success) {
-            // The entry just written by the view model is at the top of the history.
-            val latest = state.history.firstOrNull()?.takeIf { it.success && it.contentUri != null }
-            if (latest != null) {
-                Button(
-                    onClick = { onOpen(latest) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = extra.success,
-                        contentColor = extra.onSuccess,
-                    ),
-                ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("播放刚保存的视频")
-                }
-            }
-        }
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = colors.onPrimaryContainer,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            status.ifBlank { "正在下载…" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onPrimaryContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text("查看", style = MaterialTheme.typography.labelLarge, color = colors.onPrimaryContainer)
     }
 }
 
@@ -1185,6 +1097,33 @@ private fun formatTime(epochMs: Long): String {
         today -> "今天 $clock"
         today.minusDays(1) -> "昨天 $clock"
         else -> "${time.monthValue}月${time.dayOfMonth}日 $clock"
+    }
+}
+
+internal fun shareVideos(context: Context, entries: List<HistoryEntry>) {
+    val uris = entries.mapNotNull { entry ->
+        entry.contentUri?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+    }
+    if (uris.isEmpty()) return
+    val intent = if (uris.size == 1) {
+        Intent(Intent.ACTION_SEND).apply {
+            type = "video/mp4"
+            putExtra(Intent.EXTRA_STREAM, uris.first())
+        }
+    } else {
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "video/mp4"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+    }
+    val clip = ClipData.newUri(context.contentResolver, "video", uris.first())
+    uris.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
+    intent.clipData = clip
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    try {
+        context.startActivity(Intent.createChooser(intent, "分享视频"))
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "没有找到可以分享的应用", Toast.LENGTH_SHORT).show()
     }
 }
 

@@ -64,6 +64,8 @@ internal data class UiState(
     val historyUndo: HistoryUndo? = null,
     val choices: List<VideoChoice> = emptyList(),
     val selected: Set<Int> = emptySet(),
+    val dialogHidden: Boolean = false,
+    val savedNow: List<HistoryEntry> = emptyList(),
 )
 
 /** A just-deleted batch the user can still bring back from the snackbar. */
@@ -81,10 +83,11 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val downloadClient = client.newBuilder()
         .readTimeout(3, TimeUnit.MINUTES)
         .build()
-    private val linkResolver = LinkResolver(client)
-    private val sharePage = HttpSharePage(client)
-    private val xClient = XClient(client)
-    private val downloader = VideoDownloader(downloadClient)
+    private val http = HttpCalls()
+    private val linkResolver = LinkResolver(client, http)
+    private val sharePage = HttpSharePage(client, http)
+    private val xClient = XClient(client, http)
+    private val downloader = VideoDownloader(downloadClient, http)
     private val gallery = GallerySaver(app, downloader)
     private val updater = AppUpdater(app, client)
     private val _installRequests = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -110,6 +113,8 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var ignoredUrl: String? = null
     private var pendingX: XPost? = null
     private var currentIsX = false
+    private var runId = 0
+    private var lastText = ""
 
     fun updateInput(value: String) {
         _state.update { it.copy(input = value) }
@@ -137,7 +142,8 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun start(text: String) {
-        job?.cancel()
+        runId++
+        lastText = text
         pendingX = null
         currentIsX = false
         ignoredUrl = runCatching { ShareTextParser.extract(text).url }.getOrNull()
@@ -150,9 +156,55 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 progress = null,
                 choices = emptyList(),
                 selected = emptySet(),
+                dialogHidden = false,
+                savedNow = emptyList(),
             )
         }
-        launchWork { download(text) }
+        launchWork { permit -> download(text, permit) }
+    }
+
+    fun cancelDownload() {
+        if (_state.value.phase != Phase.Working) return
+        runId++
+        http.cancel()
+        job?.cancel()
+        job = null
+        pendingX = null
+        _state.update {
+            it.copy(
+                phase = Phase.Idle,
+                status = "",
+                progress = null,
+                choices = emptyList(),
+                selected = emptySet(),
+                dialogHidden = false,
+                savedNow = emptyList(),
+            )
+        }
+    }
+
+    fun hideDownload() {
+        if (_state.value.phase != Phase.Working) return
+        _state.update { it.copy(dialogHidden = true) }
+    }
+
+    fun showDownload() {
+        if (_state.value.phase == Phase.Idle || _state.value.phase == Phase.Picking) return
+        _state.update { it.copy(dialogHidden = false) }
+    }
+
+    fun dismissResult() {
+        val phase = _state.value.phase
+        if (phase != Phase.Success && phase != Phase.Error) return
+        _state.update {
+            it.copy(phase = Phase.Idle, status = "", progress = null, dialogHidden = false, savedNow = emptyList())
+        }
+    }
+
+    fun retryDownload() {
+        val text = lastText
+        if (text.isBlank()) return
+        start(text)
     }
 
     fun toggleChoice(index: Int) {
@@ -188,9 +240,11 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 choices = emptyList(),
                 selected = emptySet(),
                 clipboard = null,
+                dialogHidden = false,
+                savedNow = emptyList(),
             )
         }
-        launchWork { downloadChosen(post, chosen) }
+        launchWork { permit -> downloadChosen(post, chosen, permit) }
     }
 
     fun dismissChoices() {
@@ -201,15 +255,18 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun launchWork(block: suspend () -> Unit) {
+    private fun launchWork(block: suspend (() -> Boolean) -> Unit) {
+        val id = runId
+        http.cancel()
         job?.cancel()
         job = viewModelScope.launch {
+            val permit = { id == runId }
             try {
-                block()
+                block(permit)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (!isActive) throw error
+                if (!isActive || id != runId) return@launch
                 val message = userMessage(error, currentIsX)
                 Log.w(TAG, message, error)
                 record(
@@ -221,6 +278,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                     uri = null,
                     platform = if (currentIsX) "X" else "抖音",
                 )
+                if (id != runId) return@launch
                 _state.update {
                     it.copy(
                         phase = Phase.Error,
@@ -229,26 +287,28 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                         history = historyStore.load(),
                         choices = emptyList(),
                         selected = emptySet(),
+                        dialogHidden = false,
                     )
                 }
             }
         }
     }
 
-    private suspend fun download(text: String) {
+    private suspend fun download(text: String, permit: () -> Boolean) {
         val link = ShareTextParser.extract(text)
         currentIsX = link.platform == Platform.X
         when (link.platform) {
-            Platform.DOUYIN -> downloadDouyin(link.url)
-            Platform.X -> prepareX(link.url)
+            Platform.DOUYIN -> downloadDouyin(link.url, permit)
+            Platform.X -> prepareX(link.url, permit)
         }
     }
 
-    private suspend fun prepareX(url: String) {
+    private suspend fun prepareX(url: String, permit: () -> Boolean) {
         setWorking("正在解析帖子…")
-        val post = withContext(Dispatchers.IO) { xClient.fetch(url) }
+        val post = withContext(Dispatchers.IO) { xClient.fetch(url, permit) }
+        if (!permit()) throw CancellationException("已取消")
         if (post.videos.size <= 1) {
-            downloadChosen(post, post.videos)
+            downloadChosen(post, post.videos, permit)
             return
         }
         pendingX = post
@@ -270,10 +330,11 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun downloadChosen(post: XPost, videos: List<XVideo>) {
+    private suspend fun downloadChosen(post: XPost, videos: List<XVideo>, permit: () -> Boolean) {
         if (videos.isEmpty()) throw ParseException("请先选择要下载的视频。")
-        val saved = mutableListOf<String>()
+        val saved = mutableListOf<HistoryEntry>()
         videos.forEach { video ->
+            if (!permit()) throw CancellationException("已取消")
             val prefix = if (post.videos.size > 1) "第 ${video.index} 个 · " else ""
             setWorking("${prefix}正在选择清晰度…")
             val chosen = withContext(Dispatchers.IO) {
@@ -283,6 +344,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                     referer = XLinks.REFERER,
                     emptyMessage = "视频地址无法下载。X 拒绝了请求，或链接已失效。",
                     minBytes = 1024,
+                    permit = permit,
                 )
             }
             var lastTick = 0L
@@ -303,10 +365,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                     userAgent = XLinks.USER_AGENT,
                     referer = XLinks.REFERER,
                     minBytes = 1024,
+                    permit = permit,
                 )
             }
-            saved += uri
-            record(
+            saved += record(
                 success = true,
                 awemeId = post.id,
                 title = xTitle(post, video),
@@ -322,13 +384,20 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
             "已保存 ${saved.size} 个视频到相册（DCIM/X）"
         }
         _state.update {
-            it.copy(phase = Phase.Success, status = status, progress = 1f, history = historyStore.load())
+            it.copy(
+                phase = Phase.Success,
+                status = status,
+                progress = 1f,
+                history = historyStore.load(),
+                savedNow = saved.toList(),
+                dialogHidden = false,
+            )
         }
     }
 
-    private suspend fun downloadDouyin(url: String) {
+    private suspend fun downloadDouyin(url: String, permit: () -> Boolean) {
         setWorking("正在解析短链接…")
-        val finalUrl = withContext(Dispatchers.IO) { linkResolver.resolve(url) }
+        val finalUrl = withContext(Dispatchers.IO) { linkResolver.resolve(url, permit) }
         Log.i(TAG, "resolved $finalUrl")
         if (finalUrl.contains("jingxuan") || finalUrl.contains("web_video_404")) {
             throw ParseException("这个链接打不开，作品可能已删除或设为私密。")
@@ -341,7 +410,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         setWorking("正在获取无水印地址…")
         val httpPayload = withContext(Dispatchers.IO) {
-            runCatching { sharePage.fetch(awemeId) }.getOrNull()
+            runCatching { sharePage.fetch(awemeId, permit) }.getOrElse { error ->
+                if (error is CancellationException) throw error
+                null
+            }
         }
         val fromPage = httpPayload?.let { runCatching { VideoInfoParser.parse(it, awemeId) }.getOrNull() }
         val video = if (fromPage != null) {
@@ -356,7 +428,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         setWorking("正在选择清晰度…")
-        val chosen = withContext(Dispatchers.IO) { downloader.select(video.downloadUrls) }
+        val chosen = withContext(Dispatchers.IO) { downloader.select(video.downloadUrls, permit = permit) }
         Log.i(TAG, "uri=${video.videoUri} bytes=${chosen.totalBytes} play=${chosen.url.substringBefore('?')}")
 
         var lastTick = 0L
@@ -374,9 +446,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val label = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
                     _state.update { it.copy(phase = Phase.Working, status = label, progress = fraction) }
                 },
+                permit = permit,
             )
         }
-        record(
+        val entry = record(
             success = true,
             awemeId = video.awemeId,
             title = video.title,
@@ -390,6 +463,8 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 status = "已保存到相册（DCIM/Douyin）",
                 progress = 1f,
                 history = historyStore.load(),
+                savedNow = listOf(entry),
+                dialogHidden = false,
             )
         }
     }
@@ -540,19 +615,19 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         message: String,
         uri: String?,
         platform: String = "抖音",
-    ) {
-        historyStore.add(
-            HistoryEntry(
-                awemeId = awemeId,
-                title = title.ifBlank { if (platform == "X") "X 视频" else "抖音视频" },
-                author = author,
-                savedAt = System.currentTimeMillis(),
-                success = success,
-                message = message,
-                contentUri = uri,
-                platform = platform,
-            ),
+    ): HistoryEntry {
+        val entry = HistoryEntry(
+            awemeId = awemeId,
+            title = title.ifBlank { if (platform == "X") "X 视频" else "抖音视频" },
+            author = author,
+            savedAt = System.currentTimeMillis(),
+            success = success,
+            message = message,
+            contentUri = uri,
+            platform = platform,
         )
+        historyStore.add(entry)
+        return entry
     }
 
     companion object {

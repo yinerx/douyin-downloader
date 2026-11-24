@@ -82,6 +82,12 @@ class MainActivity : ComponentActivity() {
                     onToggleAllChoices = viewModel::toggleAllChoices,
                     onConfirmChoices = { runWithStorage { viewModel.confirmChoices() } },
                     onDismissChoices = viewModel::dismissChoices,
+                    onCancelDownload = viewModel::cancelDownload,
+                    onHideDownload = viewModel::hideDownload,
+                    onShowDownload = viewModel::showDownload,
+                    onDismissResult = viewModel::dismissResult,
+                    onRetryDownload = { runWithStorage { viewModel.retryDownload() } },
+                    onShare = { shareVideos(this@MainActivity, it) },
                 )
                 InstallUpdateEffect()
             }

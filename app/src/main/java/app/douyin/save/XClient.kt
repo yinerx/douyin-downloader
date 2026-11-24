@@ -12,14 +12,17 @@ import java.io.IOException
  * 公开帖子不登录。先请求 X 的嵌入接口，被限流或失败时再试 fxtwitter、vxtwitter。
  * 帖子已删除、受保护，或确实没有视频时不再换接口。
  */
-internal class XClient(private val client: OkHttpClient) {
-    fun fetch(pageUrl: String): XPost {
-        val id = resolve(pageUrl)
+internal class XClient(
+    private val client: OkHttpClient,
+    private val http: HttpCalls,
+) {
+    fun fetch(pageUrl: String, permit: () -> Boolean = { true }): XPost {
+        val id = resolve(pageUrl, permit)
         var rateLimited = false
         var fallback: Exception? = null
         for (endpoint in XLinks.endpoints(id)) {
             try {
-                val (code, body) = get(endpoint)
+                val (code, body) = get(endpoint, permit)
                 if (code == 429) {
                     rateLimited = true
                     continue
@@ -40,7 +43,7 @@ internal class XClient(private val client: OkHttpClient) {
         throw fallback ?: ParseException("连接 X 失败，请检查网络后重试。")
     }
 
-    private fun resolve(pageUrl: String): String {
+    private fun resolve(pageUrl: String, permit: () -> Boolean): String {
         XLinks.statusId(pageUrl)?.let { return it }
         if (!XLinks.isShortLink(pageUrl)) {
             throw ParseException("这不是一条 X 帖子链接。请打开具体的帖子再分享。")
@@ -49,10 +52,10 @@ internal class XClient(private val client: OkHttpClient) {
             .url(pageUrl)
             .header("User-Agent", XLinks.USER_AGENT)
             .build()
-        client.newCall(request).execute().use { response ->
+        return http.execute(permit, client, request) { response ->
             val finalUrl = response.request.url.toString()
             val id = XLinks.statusId(finalUrl)
-            if (id != null) return id
+            if (id != null) return@execute id
             if (!response.isSuccessful) {
                 throw ParseException("短链接打不开（HTTP ${response.code}）。请换一条分享链接。")
             }
@@ -60,14 +63,14 @@ internal class XClient(private val client: OkHttpClient) {
         }
     }
 
-    private fun get(url: String): Pair<Int, String> {
+    private fun get(url: String, permit: () -> Boolean): Pair<Int, String> {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", XLinks.USER_AGENT)
             .header("Accept", "application/json")
             .build()
-        client.newCall(request).execute().use { response ->
-            return response.code to response.body?.string().orEmpty()
+        return http.execute(permit, client, request) { response ->
+            response.code to response.body?.string().orEmpty()
         }
     }
 }
