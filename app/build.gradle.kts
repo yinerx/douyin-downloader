@@ -25,8 +25,8 @@ android {
         applicationId = "app.douyin.save"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
         val updateUrl = (project.findProperty("updateManifestUrl") as String?)
             ?: "https://api.github.com/repos/yinerx/douyin-downloader/releases/latest"
         buildConfigField("String", "UPDATE_URL", "\"$updateUrl\"")
