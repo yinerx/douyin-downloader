@@ -118,13 +118,13 @@ Release 包只使用 GitHub Actions 里的 PKCS12 钥匙，证书 SHA-256 是 `7
 
 ### 公开的 Release
 
-仓库已经是公开的。应用不带登录，直接请求：
+仓库已经是公开的。应用不带登录，先读这个附件（会跳转到 `objects.githubusercontent.com`，不走每小时 60 次的 API 限额）：
 
 ```
-https://api.github.com/repos/yinerx/douyin-downloader/releases/latest
+https://github.com/yinerx/douyin-downloader/releases/latest/download/latest.json
 ```
 
-发布附件的下载地址同样公开，手机不用 token。还没有任何 Release 时，这个接口返回 404，应用会写「还没有发布」，不会当成已经是最新版。
+这个地址打不开时，才退回 `https://api.github.com/repos/yinerx/douyin-downloader/releases/latest`。API 返回 403 或 429 时，界面写「GitHub 限制了当前网络的访问次数」，而不是只给一个 HTTP 状态码。发布附件的下载地址同样公开，手机不用 token。还没有任何 Release 时，应用会写「还没有发布」，不会当成已经是最新版。
 
 默认地址在 `gradle.properties` 的 `updateManifestUrl`。装好之后也可以在「检查更新」卡片里改，存在本机。自定义地址如果是一份 JSON，格式是：
 

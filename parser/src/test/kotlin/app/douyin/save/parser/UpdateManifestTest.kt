@@ -57,6 +57,39 @@ class UpdateManifestTest {
     }
 
     @Test
+    fun parsesThePublishedLatestJson() {
+        val update = UpdateManifests.parse(
+            """
+            {
+              "versionCode": 5,
+              "versionName": "1.1.1",
+              "changelog": "- 下载进度、完成和失败改成对话框",
+              "apkUrl": "https://github.com/yinerx/douyin-downloader/releases/download/1.1.1/douyin-save.apk"
+            }
+            """.trimIndent(),
+        )
+        assertEquals(5, update.versionCode)
+        assertEquals("1.1.1", update.versionName)
+        assertTrue(update.apkUrl.endsWith("/douyin-save.apk"))
+        assertTrue(UpdateManifests.isNewerThan(update, 4, "1.1.0"))
+        assertFalse(UpdateManifests.isNewerThan(update, 5, "1.1.1"))
+    }
+
+    @Test
+    fun githubAssetUrlIsPrimaryAndApiQuotaHasAMessage() {
+        assertTrue(UpdateSources.usesGitHub(""))
+        assertTrue(UpdateSources.usesGitHub(UpdateSources.ASSET))
+        assertTrue(UpdateSources.usesGitHub(UpdateSources.API + "/"))
+        assertFalse(UpdateSources.usesGitHub("https://example.com/latest.json"))
+        assertEquals(
+            "GitHub 限制了当前网络的访问次数，换个节点或稍后再试。",
+            UpdateSources.limitMessage(403),
+        )
+        assertEquals(UpdateSources.limitMessage(403), UpdateSources.limitMessage(429))
+        assertEquals(null, UpdateSources.limitMessage(404))
+    }
+
+    @Test
     fun rejectsUnknownJsonAndMissingApk() {
         assertTrue(expectParseError { UpdateManifests.parse("""{"message":"Not Found"}""") }.contains("Not Found"))
         assertTrue(
