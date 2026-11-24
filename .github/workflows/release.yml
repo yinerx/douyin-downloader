@@ -115,6 +115,7 @@ jobs:
                   "versionCode": int(os.environ["VERSION_CODE"]),
                   "versionName": os.environ["VERSION_NAME"],
                   "changelog": changelog,
+                  "downloadUrl": os.environ["APK_URL"],
                   "apkUrl": os.environ["APK_URL"],
               },
               open("latest.json", "w", encoding="utf-8"),

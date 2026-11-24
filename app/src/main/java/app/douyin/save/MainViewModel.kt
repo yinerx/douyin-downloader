@@ -537,7 +537,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(updateDownloading = true, updateProgress = null) }
             try {
                 val file = withContext(Dispatchers.IO) {
-                    updater.download(offer.apkUrl) { fraction ->
+                    updater.download(offer.downloadUrl) { fraction ->
                         _state.update { it.copy(updateProgress = fraction) }
                     }
                 }

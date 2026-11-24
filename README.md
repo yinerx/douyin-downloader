@@ -133,9 +133,11 @@ https://github.com/yinerx/douyin-downloader/releases/latest/download/latest.json
   "versionCode": 4,
   "versionName": "1.1.0",
   "changelog": "写给自己看的说明",
-  "apkUrl": "https://example.com/douyin-save.apk"
+  "downloadUrl": "https://example.com/douyin-save.apk"
 }
 ```
+
+没有 `downloadUrl` 时仍认旧字段 `apkUrl`。发布出来的 `latest.json` 两个都写，值相同。
 
 ## 解析原理（2026-11-19 实测）
 
