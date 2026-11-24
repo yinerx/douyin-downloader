@@ -6,6 +6,23 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+object UpdateSources {
+    const val ASSET =
+        "https://github.com/yinerx/douyin-downloader/releases/latest/download/latest.json"
+    const val API =
+        "https://api.github.com/repos/yinerx/douyin-downloader/releases/latest"
+    const val RATE_LIMIT =
+        "GitHub 限制了当前网络的访问次数，换个节点或稍后再试。"
+
+    /** 空地址、附件地址，或旧的默认 API 地址，都走「先附件、再 API」。自定义地址不走这条。 */
+    fun usesGitHub(url: String): Boolean {
+        val normalized = url.trim().trimEnd('/')
+        return normalized.isEmpty() || normalized == ASSET || normalized == API
+    }
+
+    fun limitMessage(status: Int): String? = if (status == 403 || status == 429) RATE_LIMIT else null
+}
+
 data class RemoteUpdate(
     val versionCode: Int,
     val versionName: String,
