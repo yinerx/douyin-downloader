@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -641,9 +643,17 @@ private fun SectionTitle(
     }
 }
 
+private enum class HistoryTone { Saved, Failed, Working }
+
+private fun historyTone(entry: HistoryEntry): HistoryTone = when {
+    entry.success -> HistoryTone.Saved
+    entry.message.startsWith("正在") -> HistoryTone.Working
+    else -> HistoryTone.Failed
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HistoryRow(
+internal fun HistoryRow(
     entry: HistoryEntry,
     onOpen: (HistoryEntry) -> Unit,
     onDelete: () -> Unit,
@@ -657,11 +667,34 @@ private fun HistoryRow(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val openable = entry.success && entry.contentUri != null
-    val canReuse = !entry.success && entry.sourceUrl.isNotBlank()
+    val canCopy = !entry.success && entry.sourceUrl.isNotBlank()
+    val canRetry = canCopy && historyTone(entry) != HistoryTone.Working
+    val tone = historyTone(entry)
+    val accent = when (tone) {
+        HistoryTone.Saved -> extra.success
+        HistoryTone.Failed -> colors.error
+        HistoryTone.Working -> colors.primary
+    }
+    val pillContainer = when (tone) {
+        HistoryTone.Saved -> extra.successContainer
+        HistoryTone.Failed -> colors.errorContainer
+        HistoryTone.Working -> colors.primaryContainer
+    }
+    val pillContent = when (tone) {
+        HistoryTone.Saved -> extra.success
+        HistoryTone.Failed -> colors.error
+        HistoryTone.Working -> colors.primary
+    }
+    val pillLabel = when (tone) {
+        HistoryTone.Saved -> "已保存"
+        HistoryTone.Failed -> "失败"
+        HistoryTone.Working -> "下载中"
+    }
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .height(IntrinsicSize.Min)
             .clip(RoundedCornerShape(20.dp))
             .background(colors.surfaceContainerLow)
             .combinedClickable(
@@ -673,43 +706,23 @@ private fun HistoryRow(
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     menuOpen = true
                 },
-            )
-            .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            ),
+        verticalAlignment = Alignment.Top,
     ) {
-        val tileColor = if (entry.success) colors.primaryContainer else colors.errorContainer
-        val tileTint = if (entry.success) colors.onPrimaryContainer else colors.error
         Box(
+            Modifier
+                .padding(vertical = 14.dp)
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(accent, RoundedCornerShape(topEnd = 2.dp, bottomEnd = 2.dp)),
+        )
+        Column(
             modifier = Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(tileColor),
-            contentAlignment = Alignment.Center,
+                .weight(1f)
+                .padding(start = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Icon(
-                when {
-                    openable -> Icons.Filled.PlayArrow
-                    entry.success -> AppIcons.Movie
-                    else -> AppIcons.ErrorOutline
-                },
-                contentDescription = null,
-                tint = tileTint,
-                modifier = Modifier.size(if (openable) 26.dp else 22.dp),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.platform.ifBlank { "抖音" },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.onPrimaryContainer,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(colors.primaryContainer)
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                )
-                Spacer(Modifier.width(6.dp))
+            Row(verticalAlignment = Alignment.Top) {
                 Text(
                     entry.title.ifBlank { "视频" },
                     style = MaterialTheme.typography.titleSmall,
@@ -718,10 +731,24 @@ private fun HistoryRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    pillLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = pillContent,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .padding(top = 1.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(pillContainer)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
             }
-            val meta = listOf(entry.author, formatTime(entry.savedAt))
-                .filter { it.isNotBlank() }
-                .joinToString(" · ")
+            val meta = listOfNotNull(
+                entry.platform.ifBlank { "抖音" },
+                entry.author.takeIf { it.isNotBlank() },
+                formatTime(entry.savedAt).takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
             if (meta.isNotBlank()) {
                 Text(
                     meta,
@@ -731,24 +758,17 @@ private fun HistoryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(if (entry.success) extra.success else colors.error),
-                )
-                Spacer(Modifier.width(6.dp))
+            if (tone == HistoryTone.Failed && entry.message.isNotBlank()) {
                 Text(
                     entry.message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (entry.success) extra.success else colors.error,
+                    color = colors.error,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        Box {
+        Box(Modifier.padding(top = 2.dp, end = 2.dp)) {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "更多操作", tint = colors.onSurfaceVariant)
             }
@@ -768,7 +788,7 @@ private fun HistoryRow(
                         },
                     )
                 }
-                if (canReuse) {
+                if (canCopy) {
                     DropdownMenuItem(
                         text = { Text("复制链接") },
                         leadingIcon = { Icon(AppIcons.Copy, contentDescription = null) },
@@ -779,6 +799,8 @@ private fun HistoryRow(
                             Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                         },
                     )
+                }
+                if (canRetry) {
                     DropdownMenuItem(
                         text = { Text("重新下载") },
                         leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
