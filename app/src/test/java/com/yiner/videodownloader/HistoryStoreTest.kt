@@ -77,6 +77,32 @@ class HistoryStoreTest {
     }
 
     @Test
+    fun sourceUrlRoundTripsAndUpdateKeepsTheSameRow() {
+        store.add(
+            entry("1").copy(
+                id = "row-1",
+                sourceUrl = "https://x.com/animel7316/status/2125245578590531786?a=1&s=20",
+                success = false,
+                message = "下载失败",
+            ),
+        )
+        val updated = store.update("row-1") { it.copy(success = true, message = "已保存到相册") }
+        assertEquals(true, updated?.success)
+        val loaded = store.load().single()
+        assertEquals("row-1", loaded.id)
+        assertEquals("https://x.com/animel7316/status/2125245578590531786?a=1&s=20", loaded.sourceUrl)
+        assertEquals("已保存到相册", loaded.message)
+        assertEquals(1, store.load().size)
+    }
+
+    @Test
+    fun removeMatchesAChangedCopyOfTheSameId() {
+        store.add(entry("1").copy(id = "row-1", message = "失败"))
+        assertEquals(1, store.remove(listOf(entry("1").copy(id = "row-1", message = "正在下载…"))))
+        assertTrue(store.load().isEmpty())
+    }
+
+    @Test
     fun addStillCapsAtThirtyNewestFirst() {
         (1..35).forEach { store.add(entry("$it")) }
         val loaded = store.load()

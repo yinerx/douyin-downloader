@@ -111,6 +111,12 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private var job: Job? = null
     private var ignoredUrl: String? = null
+    /** Exact clipboard text this app just wrote. Ignored when the window regains focus. */
+    private var ownClipboard: String? = null
+    /** Failed row being retried. New results replace it instead of appending another line. */
+    private var updatingId: String? = null
+    private var updatingPriorMessage: String? = null
+    private var updatedOnce = false
     private var pendingX: XPost? = null
     private var pendingSources: XClient.Sources? = null
     private var currentIsX = false
@@ -123,9 +129,16 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun offerClipboard(text: String) {
         if (_state.value.phase == Phase.Working) return
+        val trimmed = text.trim()
+        if (ownClipboard != null && trimmed == ownClipboard) return
         val link = runCatching { ShareTextParser.extract(text) }.getOrNull() ?: return
         if (link.url == ignoredUrl) return
         _state.update { it.copy(clipboard = ClipboardOffer(text, link.url, link.platform)) }
+    }
+
+    /** Remember text we put on the clipboard so the focus-time reader does not offer it back. */
+    fun suppressOwnClipboard(text: String) {
+        ownClipboard = text.trim()
     }
 
     fun dismissClipboard() {
@@ -142,9 +155,27 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         start(_state.value.input)
     }
 
+    fun retryHistory(entry: HistoryEntry) {
+        val url = entry.sourceUrl
+        if (url.isBlank() || entry.id.isBlank()) return
+        if (_state.value.phase == Phase.Working || _state.value.phase == Phase.Picking) return
+        updatingPriorMessage = entry.message
+        historyStore.update(entry.id) { it.copy(message = "正在下载…", success = false) }
+        _state.update { it.copy(history = historyStore.load()) }
+        start(url, replaceId = entry.id)
+    }
+
     fun start(text: String) {
+        start(text, replaceId = null)
+    }
+
+    private fun start(text: String, replaceId: String?) {
+        if (replaceId == null) restoreUpdatingRow()
         runId++
         lastText = text
+        updatingId = replaceId
+        updatedOnce = false
+        if (replaceId == null) updatingPriorMessage = null
         pendingX = null
         pendingSources = null
         currentIsX = false
@@ -173,6 +204,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         job = null
         pendingX = null
         pendingSources = null
+        if (!updatedOnce) restoreUpdatingRow() else {
+            updatingId = null
+            updatingPriorMessage = null
+        }
         _state.update {
             it.copy(
                 phase = Phase.Idle,
@@ -256,6 +291,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.phase != Phase.Picking) return
         pendingX = null
         pendingSources = null
+        if (!updatedOnce) restoreUpdatingRow() else {
+            updatingId = null
+            updatingPriorMessage = null
+        }
         _state.update {
             it.copy(phase = Phase.Idle, status = "", progress = null, choices = emptyList(), selected = emptySet())
         }
@@ -295,6 +334,11 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                         selected = emptySet(),
                         dialogHidden = false,
                     )
+                }
+            } finally {
+                if (id == runId && _state.value.phase != Phase.Picking) {
+                    updatingId = null
+                    updatingPriorMessage = null
                 }
             }
         }
@@ -396,6 +440,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val fraction = if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else null
                         val percent = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
                         _state.update { it.copy(phase = Phase.Working, status = prefix + percent, progress = fraction) }
+                        noteHistoryStatus(prefix + percent)
                     },
                     userAgent = XLinks.USER_AGENT,
                     referer = chosen.referer,
@@ -481,6 +526,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val fraction = if (total > 0) (read.toFloat() / total).coerceIn(0f, 1f) else null
                     val label = if (total > 0) "正在下载 ${(read * 100 / total).toInt()}%" else "正在下载…"
                     _state.update { it.copy(phase = Phase.Working, status = label, progress = fraction) }
+                    noteHistoryStatus(label)
                 },
                 permit = permit,
             )
@@ -641,6 +687,25 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun setWorking(status: String) {
         _state.update { it.copy(phase = Phase.Working, status = status, progress = null) }
+        noteHistoryStatus(status)
+    }
+
+    private fun noteHistoryStatus(status: String) {
+        val id = updatingId ?: return
+        if (updatedOnce) return
+        historyStore.update(id) { it.copy(message = status, success = false) }
+        _state.update { it.copy(history = historyStore.load()) }
+    }
+
+    private fun restoreUpdatingRow() {
+        val id = updatingId ?: return
+        val prior = updatingPriorMessage
+        updatingId = null
+        updatingPriorMessage = null
+        updatedOnce = false
+        if (id.isBlank() || prior == null) return
+        historyStore.update(id) { it.copy(message = prior, success = false) }
+        _state.update { it.copy(history = historyStore.load()) }
     }
 
     private fun record(
@@ -652,6 +717,27 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         uri: String?,
         platform: String = "抖音",
     ): HistoryEntry {
+        val sourceUrl = runCatching { ShareTextParser.extract(lastText).url }.getOrNull().orEmpty()
+        val replacing = updatingId
+        if (replacing != null && !updatedOnce) {
+            updatedOnce = true
+            val updated = historyStore.update(replacing) { old ->
+                old.copy(
+                    awemeId = awemeId.ifBlank { old.awemeId },
+                    title = if (success && title.isNotBlank()) title else old.title.ifBlank { title },
+                    author = if (author.isNotBlank()) author else old.author,
+                    success = success,
+                    message = message,
+                    contentUri = if (success) uri else null,
+                    platform = platform.ifBlank { old.platform },
+                    sourceUrl = old.sourceUrl.ifBlank { sourceUrl },
+                )
+            }
+            if (updated != null) return updated
+        }
+        if (replacing != null && !success) {
+            return HistoryEntry(awemeId, title, author, 0L, false, message, null, platform, sourceUrl)
+        }
         val entry = HistoryEntry(
             awemeId = awemeId,
             title = title.ifBlank { if (platform == "X") "X 视频" else "抖音视频" },
@@ -661,10 +747,14 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
             message = message,
             contentUri = uri,
             platform = platform,
+            sourceUrl = sourceUrl,
+            id = newHistoryId(),
         )
         historyStore.add(entry)
         return entry
     }
+
+    private fun newHistoryId(): String = "${System.currentTimeMillis().toString(36)}-${System.nanoTime().toString(36)}"
 
     companion object {
         private const val TAG = "DouyinSave"

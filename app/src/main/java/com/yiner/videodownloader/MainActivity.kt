@@ -87,6 +87,8 @@ class MainActivity : ComponentActivity() {
                     onShowDownload = viewModel::showDownload,
                     onDismissResult = viewModel::dismissResult,
                     onRetryDownload = { runWithStorage { viewModel.retryDownload() } },
+                    onRetryHistory = { runWithStorage { viewModel.retryHistory(it) } },
+                    onCopiedLink = viewModel::suppressOwnClipboard,
                     onShare = { shareVideos(this@MainActivity, it) },
                 )
                 InstallUpdateEffect()
