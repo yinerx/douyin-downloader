@@ -10,12 +10,7 @@ import androidx.compose.ui.text.AnnotatedString
 import com.yiner.videodownloader.parser.Platform
 import com.yiner.videodownloader.parser.RemoteUpdate
 import android.content.ClipData
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -112,6 +107,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -205,25 +202,6 @@ internal fun HomeScreen(
                 item(key = "header") {
                     Header(onOpenSettings = { showSettings = true })
                 }
-                item(key = "clipboard") {
-                    // Keep the last offer around while the card animates out.
-                    val lastOffer = remember { arrayOfNulls<ClipboardOffer>(1) }
-                    state.clipboard?.let { lastOffer[0] = it }
-                    AnimatedVisibility(
-                        visible = state.clipboard != null,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically(),
-                    ) {
-                        val offer = lastOffer[0] ?: return@AnimatedVisibility
-                        ClipboardCard(
-                            title = if (offer.platform == Platform.X) "发现剪贴板里的 X 链接" else "发现剪贴板里的抖音链接",
-                            url = offer.url,
-                            enabled = !busy,
-                            onDownload = onDownloadClipboard,
-                            onDismiss = onDismissClipboard,
-                        )
-                    }
-                }
                 item(key = "input") {
                     InputCard(
                         input = state.input,
@@ -276,6 +254,27 @@ internal fun HomeScreen(
                 onCheckUpdate = onCheckUpdate,
                 onUpdateUrl = onUpdateUrl,
                 onCheckOnLaunch = onCheckOnLaunch,
+            )
+        }
+    }
+
+    val clipboardOffer = state.clipboard
+    if (clipboardOffer != null) {
+        Dialog(
+            onDismissRequest = onDismissClipboard,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            ClipboardCard(
+                title = if (clipboardOffer.platform == Platform.X) {
+                    "发现剪贴板里的 X 链接"
+                } else {
+                    "发现剪贴板里的抖音链接"
+                },
+                url = clipboardOffer.url,
+                enabled = !busy,
+                onDownload = onDownloadClipboard,
+                onDismiss = onDismissClipboard,
+                modifier = Modifier.padding(horizontal = 24.dp),
             )
         }
     }
@@ -385,12 +384,13 @@ private fun ClipboardCard(
     enabled: Boolean,
     onDownload: () -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val extra = extraColors
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .clip(CardShape)
+            .clip(RoundedCornerShape(28.dp))
             .background(Brush.linearGradient(listOf(extra.brandStart, extra.brandEnd)))
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -425,6 +425,7 @@ private fun ClipboardCard(
                 modifier = Modifier
                     .weight(1f)
                     .height(46.dp),
+                shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.White,
                     contentColor = extra.brandStart,
