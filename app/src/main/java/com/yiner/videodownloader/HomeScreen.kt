@@ -777,52 +777,20 @@ private fun HistoryRow(
 @Composable
 private fun EmptyHistory() {
     val colors = MaterialTheme.colorScheme
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(CardShape)
             .border(1.dp, colors.outlineVariant, CardShape)
             .padding(horizontal = 18.dp, vertical = 22.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(colors.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(AppIcons.Movie, contentDescription = null, tint = colors.onPrimaryContainer, modifier = Modifier.size(26.dp))
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("还没有下载记录", style = MaterialTheme.typography.titleSmall, color = colors.onSurface)
-            Text(
-                "两种方式都可以开始",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.onSurfaceVariant,
-            )
-        }
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            HowToStep(icon = AppIcons.Share, text = "在抖音或 X 里点「分享」，选择「${stringResource(R.string.app_name)}」")
-            HowToStep(icon = AppIcons.Link, text = "复制链接后打开本应用，会自动识别")
-        }
-    }
-}
-
-@Composable
-private fun HowToStep(icon: ImageVector, text: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            "暂无下载记录",
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

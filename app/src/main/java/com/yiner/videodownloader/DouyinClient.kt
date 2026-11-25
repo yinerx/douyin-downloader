@@ -4,6 +4,7 @@ import com.yiner.videodownloader.parser.AwemeIds
 import com.yiner.videodownloader.parser.DouyinRequest
 import com.yiner.videodownloader.parser.ParseException
 import com.yiner.videodownloader.parser.RouterJson
+import com.yiner.videodownloader.parser.XMediaErrors
 import kotlin.coroutines.cancellation.CancellationException
 import okhttp3.Call
 import okhttp3.OkHttpClient
@@ -11,6 +12,11 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.io.OutputStream
+
+private sealed class ProbeResult
+private class ProbeHit(val video: SelectedVideo) : ProbeResult()
+private class ProbeHttp(val code: Int) : ProbeResult()
+private object ProbeNotVideo : ProbeResult()
 
 /** Tracks the in-flight OkHttp call so 「取消」 can abort it and drop a half-written file. */
 internal class HttpCalls {
@@ -88,7 +94,12 @@ internal class HttpSharePage(
     }
 }
 
-internal data class SelectedVideo(val url: String, val totalBytes: Long)
+internal data class SelectedVideo(
+    val url: String,
+    val totalBytes: Long,
+    /** 探测成功时用的 Referer。空字符串表示不要带 Referer，video.twimg.com 对错误的来源会直接 403。 */
+    val referer: String? = DouyinRequest.REFERER,
+)
 
 internal class VideoDownloader(
     private val client: OkHttpClient,
@@ -97,21 +108,43 @@ internal class VideoDownloader(
     fun select(
         urls: List<String>,
         userAgent: String = DouyinRequest.USER_AGENT,
-        referer: String = DouyinRequest.REFERER,
+        referer: String? = DouyinRequest.REFERER,
+        alternateReferers: List<String?> = emptyList(),
         emptyMessage: String = "无水印地址无法下载。抖音 CDN 拒绝了请求，或播放接口已变更。",
+        statusAware: Boolean = false,
         minBytes: Long = 16 * 1024,
         permit: () -> Boolean = { true },
     ): SelectedVideo {
+        val referers = (listOf(referer) + alternateReferers).distinct()
+        val httpCodes = mutableListOf<Int>()
+        var network = false
+        var notVideo = false
         val probes = urls.mapNotNull { url ->
-            try {
-                probe(url, userAgent, referer, minBytes, permit)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                null
+            var hit: SelectedVideo? = null
+            for (candidate in referers) {
+                try {
+                    when (val outcome = probe(url, userAgent, candidate, minBytes, permit)) {
+                        is ProbeHit -> {
+                            hit = outcome.video
+                            break
+                        }
+                        is ProbeHttp -> httpCodes += outcome.code
+                        ProbeNotVideo -> notVideo = true
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: IOException) {
+                    network = true
+                } catch (_: Exception) {
+                    network = true
+                }
             }
+            hit
         }
-        return probes.maxByOrNull { it.totalBytes } ?: throw ParseException(emptyMessage)
+        return probes.maxByOrNull { it.totalBytes } ?: throw ParseException(
+            if (statusAware) XMediaErrors.message(httpCodes, network, notVideo) else emptyMessage,
+            definitive = false,
+        )
     }
 
     fun write(
@@ -120,18 +153,24 @@ internal class VideoDownloader(
         totalHint: Long,
         onProgress: (Long, Long) -> Unit,
         userAgent: String = DouyinRequest.USER_AGENT,
-        referer: String = DouyinRequest.REFERER,
+        referer: String? = DouyinRequest.REFERER,
         minBytes: Long = 16 * 1024,
         permit: () -> Boolean = { true },
+        retryable: Boolean = false,
     ) {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
-            .header("Referer", referer)
+            .apply { if (!referer.isNullOrBlank()) header("Referer", referer) }
             .build()
         http.execute(permit, client, request) { response ->
             if (response.code != 200 && response.code != 206) {
-                throw ParseException("下载被拒绝（HTTP ${response.code}）。")
+                val message = if (retryable) {
+                    XMediaErrors.message(listOf(response.code), network = false, notVideo = false)
+                } else {
+                    "下载被拒绝（HTTP ${response.code}）。"
+                }
+                throw ParseException(message, definitive = !retryable)
             }
             val body = response.body ?: throw ParseException("下载内容为空。")
             val total = body.contentLength().takeIf { it > 0 } ?: totalHint
@@ -162,23 +201,23 @@ internal class VideoDownloader(
     private fun probe(
         url: String,
         userAgent: String,
-        referer: String,
+        referer: String?,
         minBytes: Long,
         permit: () -> Boolean,
-    ): SelectedVideo? {
+    ): ProbeResult {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
-            .header("Referer", referer)
+            .apply { if (!referer.isNullOrBlank()) header("Referer", referer) }
             .header("Range", "bytes=0-31")
             .build()
         return http.execute(permit, client, request) { response ->
-            if (response.code != 200 && response.code != 206) return@execute null
-            val bytes = response.body?.bytes() ?: return@execute null
-            if (!isFtyp(bytes, bytes.size)) return@execute null
-            val total = totalBytes(response) ?: return@execute null
-            if (total < minBytes) return@execute null
-            SelectedVideo(url, total)
+            if (response.code != 200 && response.code != 206) return@execute ProbeHttp(response.code)
+            val bytes = response.body?.bytes() ?: return@execute ProbeNotVideo
+            if (!isFtyp(bytes, bytes.size)) return@execute ProbeNotVideo
+            val total = totalBytes(response) ?: minBytes
+            if (total < minBytes) return@execute ProbeNotVideo
+            ProbeHit(SelectedVideo(url, total, referer))
         }
     }
 

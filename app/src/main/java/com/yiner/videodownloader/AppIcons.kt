@@ -42,12 +42,6 @@ internal object AppIcons {
         "M17,1.01L7,1c-1.1,0 -2,0.9 -2,2v18c0,1.1 0.9,2 2,2h10c1.1,0 2,-0.9 2,-2V3c0,-1.1 -0.9,-1.99 -2,-1.99z" +
             "M17,19H7V5h10v14zM16,13h-3V8h-2v5H8l4,4 4,-4z",
     )
-    val Share = icon(
-        "ShareIos",
-        "M16,5l-1.42,1.42 -1.59,-1.59V16h-1.98V4.83L9.42,6.42 8,5l4,-4 4,4zM20,10v11c0,1.1 -0.9,2 -2,2H6" +
-            "c-1.11,0 -2,-0.9 -2,-2V10c0,-1.11 0.89,-2 2,-2h3v2H6v11h12V10h-3V8h3c1.1,0 2,0.89 2,2z",
-    )
-
     private fun icon(name: String, path: String): ImageVector =
         ImageVector.Builder(
             name = name,

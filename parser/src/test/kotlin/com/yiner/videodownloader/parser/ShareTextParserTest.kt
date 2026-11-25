@@ -95,6 +95,19 @@ class ShareTextParserTest {
     }
 
     @Test
+    fun keepsTheReportedShareLinkAndDropsItsTrackingQueryFromTheId() {
+        val url = "https://x.com/animel7316/status/2125245578590531786?a=1pY7pvdvyCZcA3wT3hc&s=20"
+        val link = ShareTextParser.extract("看看 $url")
+        assertEquals(Platform.X, link.platform)
+        assertEquals(url, link.url)
+        assertEquals("2125245578590531786", XLinks.statusId(link.url))
+        val syndication = XLinks.syndicationUrl(XLinks.statusId(link.url)!!)
+        assertTrue(syndication.contains("id=2125245578590531786"))
+        assertTrue(!syndication.contains("a="))
+        assertTrue(!syndication.contains("s=20"))
+    }
+
+    @Test
     fun extractsBareXStatusAndShortLink() {
         assertEquals(
             Platform.X,

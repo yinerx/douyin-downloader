@@ -112,6 +112,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var job: Job? = null
     private var ignoredUrl: String? = null
     private var pendingX: XPost? = null
+    private var pendingSources: XClient.Sources? = null
     private var currentIsX = false
     private var runId = 0
     private var lastText = ""
@@ -145,6 +146,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         runId++
         lastText = text
         pendingX = null
+        pendingSources = null
         currentIsX = false
         ignoredUrl = runCatching { ShareTextParser.extract(text).url }.getOrNull()
         _state.update {
@@ -170,6 +172,7 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = null
         pendingX = null
+        pendingSources = null
         _state.update {
             it.copy(
                 phase = Phase.Idle,
@@ -227,10 +230,12 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun confirmChoices() {
         val post = pendingX ?: return
+        val sources = pendingSources
         if (_state.value.phase != Phase.Picking) return
         val chosen = post.videos.filter { it.index in _state.value.selected }
         if (chosen.isEmpty()) return
         pendingX = null
+        pendingSources = null
         currentIsX = true
         _state.update {
             it.copy(
@@ -244,12 +249,13 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 savedNow = emptyList(),
             )
         }
-        launchWork { permit -> downloadChosen(post, chosen, permit) }
+        launchWork { permit -> downloadWithFallback(sources, post, chosen, permit) }
     }
 
     fun dismissChoices() {
         if (_state.value.phase != Phase.Picking) return
         pendingX = null
+        pendingSources = null
         _state.update {
             it.copy(phase = Phase.Idle, status = "", progress = null, choices = emptyList(), selected = emptySet())
         }
@@ -305,13 +311,16 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun prepareX(url: String, permit: () -> Boolean) {
         setWorking("正在解析帖子…")
-        val post = withContext(Dispatchers.IO) { xClient.fetch(url, permit) }
+        val sources = withContext(Dispatchers.IO) { xClient.open(url, permit) }
+        val post = withContext(Dispatchers.IO) { sources.next() }
+            ?: throw ParseException("连接 X 失败，请检查网络后重试。")
         if (!permit()) throw CancellationException("已取消")
         if (post.videos.size <= 1) {
-            downloadChosen(post, post.videos, permit)
+            downloadWithFallback(sources, post, post.videos, permit)
             return
         }
         pendingX = post
+        pendingSources = sources
         _state.update {
             it.copy(
                 phase = Phase.Picking,
@@ -330,6 +339,31 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private suspend fun downloadWithFallback(
+        sources: XClient.Sources?,
+        post: XPost,
+        videos: List<XVideo>,
+        permit: () -> Boolean,
+    ) {
+        var currentPost = post
+        var currentVideos = videos
+        while (true) {
+            try {
+                downloadChosen(currentPost, currentVideos, permit)
+                return
+            } catch (error: ParseException) {
+                if (error.definitive || sources == null) throw error
+                val next = withContext(Dispatchers.IO) { sources.next() } ?: throw error
+                if (!permit()) throw CancellationException("已取消")
+                setWorking("正在换一个来源…")
+                currentVideos = currentVideos.map { video ->
+                    next.videos.getOrNull(video.index - 1) ?: video
+                }
+                currentPost = next
+            }
+        }
+    }
+
     private suspend fun downloadChosen(post: XPost, videos: List<XVideo>, permit: () -> Boolean) {
         if (videos.isEmpty()) throw ParseException("请先选择要下载的视频。")
         val saved = mutableListOf<HistoryEntry>()
@@ -341,8 +375,9 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                 downloader.select(
                     video.urls,
                     userAgent = XLinks.USER_AGENT,
-                    referer = XLinks.REFERER,
-                    emptyMessage = "视频地址无法下载。X 拒绝了请求，或链接已失效。",
+                    referer = null,
+                    alternateReferers = listOf(XLinks.REFERER, "https://twitter.com/"),
+                    statusAware = true,
                     minBytes = 1024,
                     permit = permit,
                 )
@@ -363,9 +398,10 @@ internal class MainViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(phase = Phase.Working, status = prefix + percent, progress = fraction) }
                     },
                     userAgent = XLinks.USER_AGENT,
-                    referer = XLinks.REFERER,
+                    referer = chosen.referer,
                     minBytes = 1024,
                     permit = permit,
+                    retryable = true,
                 )
             }
             saved += record(

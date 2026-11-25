@@ -16,31 +16,50 @@ internal class XClient(
     private val client: OkHttpClient,
     private val http: HttpCalls,
 ) {
-    fun fetch(pageUrl: String, permit: () -> Boolean = { true }): XPost {
-        val id = resolve(pageUrl, permit)
-        var rateLimited = false
-        var fallback: Exception? = null
-        for (endpoint in XLinks.endpoints(id)) {
-            try {
-                val (code, body) = get(endpoint, permit)
-                if (code == 429) {
-                    rateLimited = true
-                    continue
+    /**
+     * 按顺序问每个接口。拿到帖子后就可以先下载；这条帖子的视频地址如果被拒绝，再 [Sources.next] 换下一个接口的地址。
+     * 帖子已删除、没有视频、需要登录时，第一个接口就会直接说明原因，不再往下换。
+     */
+    fun open(pageUrl: String, permit: () -> Boolean = { true }): Sources {
+        return Sources(resolve(pageUrl, permit), permit)
+    }
+
+    inner class Sources internal constructor(
+        private val id: String,
+        private val permit: () -> Boolean,
+    ) {
+        private val endpoints = XLinks.endpoints(id).iterator()
+        private var sawPost = false
+        private var rateLimited = false
+        private var fallback: Exception? = null
+
+        fun next(): XPost? {
+            while (endpoints.hasNext()) {
+                val endpoint = endpoints.next()
+                try {
+                    val (code, body) = get(endpoint, permit)
+                    if (code == 429) {
+                        rateLimited = true
+                        continue
+                    }
+                    if (code >= 500) {
+                        fallback = ParseException("X 暂时没有响应，请稍后再试。", definitive = false)
+                        continue
+                    }
+                    val post = XPostParser.parse(body, code)
+                    sawPost = true
+                    return post
+                } catch (error: ParseException) {
+                    if (error.definitive && !sawPost) throw error
+                    fallback = error
+                } catch (error: IOException) {
+                    fallback = error
                 }
-                if (code >= 500) {
-                    fallback = ParseException("X 暂时没有响应，请稍后再试。", definitive = false)
-                    continue
-                }
-                return XPostParser.parse(body, code)
-            } catch (error: ParseException) {
-                if (error.definitive) throw error
-                fallback = error
-            } catch (error: IOException) {
-                fallback = error
             }
+            if (sawPost) return null
+            if (rateLimited && fallback == null) throw ParseException("访问 X 太频繁，请稍后再试。")
+            throw fallback ?: ParseException("连接 X 失败，请检查网络后重试。")
         }
-        if (rateLimited) throw ParseException("访问 X 太频繁，请稍后再试。")
-        throw fallback ?: ParseException("连接 X 失败，请检查网络后重试。")
     }
 
     private fun resolve(pageUrl: String, permit: () -> Boolean): String {
