@@ -25,8 +25,8 @@ android {
         applicationId = "com.yiner.videodownloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.2.5"
+        versionCode = 14
+        versionName = "1.2.6"
         val updateUrl = (project.findProperty("updateManifestUrl") as String?)
             ?: "https://github.com/yinerx/douyin-downloader/releases/latest/download/latest.json"
         buildConfigField("String", "UPDATE_URL", "\"$updateUrl\"")
