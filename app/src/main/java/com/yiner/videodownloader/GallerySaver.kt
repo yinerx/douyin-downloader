@@ -21,13 +21,14 @@ internal class GallerySaver(
         album: String,
         onProgress: (Long, Long) -> Unit,
         userAgent: String = DouyinRequest.USER_AGENT,
-        referer: String = DouyinRequest.REFERER,
+        referer: String? = DouyinRequest.REFERER,
         minBytes: Long = 16 * 1024,
         permit: () -> Boolean = { true },
+        retryable: Boolean = false,
     ): String = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        saveWithMediaStore(name, source, album, onProgress, userAgent, referer, minBytes, permit)
+        saveWithMediaStore(name, source, album, onProgress, userAgent, referer, minBytes, permit, retryable)
     } else {
-        saveLegacy(name, source, album, onProgress, userAgent, referer, minBytes, permit)
+        saveLegacy(name, source, album, onProgress, userAgent, referer, minBytes, permit, retryable)
     }
 
     private fun saveWithMediaStore(
@@ -36,9 +37,10 @@ internal class GallerySaver(
         album: String,
         onProgress: (Long, Long) -> Unit,
         userAgent: String,
-        referer: String,
+        referer: String?,
         minBytes: Long,
         permit: () -> Boolean,
+        retryable: Boolean,
     ): String {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -54,7 +56,7 @@ internal class GallerySaver(
             ?: throw ParseException("无法写入相册。")
         try {
             resolver.openOutputStream(uri)?.use { output ->
-                downloader.write(source.url, output, source.totalBytes, onProgress, userAgent, referer, minBytes, permit)
+                downloader.write(source.url, output, source.totalBytes, onProgress, userAgent, referer, minBytes, permit, retryable)
             } ?: throw ParseException("无法写入相册。")
             val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
             resolver.update(uri, done, null, null)
@@ -71,9 +73,10 @@ internal class GallerySaver(
         album: String,
         onProgress: (Long, Long) -> Unit,
         userAgent: String,
-        referer: String,
+        referer: String?,
         minBytes: Long,
         permit: () -> Boolean,
+        retryable: Boolean,
     ): String {
         val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), album)
         if (!dir.exists() && !dir.mkdirs()) {
@@ -82,7 +85,7 @@ internal class GallerySaver(
         val file = File(dir, name)
         try {
             file.outputStream().use { output ->
-                downloader.write(source.url, output, source.totalBytes, onProgress, userAgent, referer, minBytes, permit)
+                downloader.write(source.url, output, source.totalBytes, onProgress, userAgent, referer, minBytes, permit, retryable)
             }
             MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf("video/mp4"), null)
             return Uri.fromFile(file).toString()

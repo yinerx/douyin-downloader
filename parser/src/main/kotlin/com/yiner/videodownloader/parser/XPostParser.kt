@@ -77,6 +77,9 @@ object XPostParser {
         }
         if (!trimmed.startsWith("{")) {
             if (httpStatus == 404) throw ParseException("这条帖子已删除或不存在。")
+            if (httpStatus == 401 || httpStatus == 403) {
+                throw ParseException("X 的接口拒绝了访问，请换个网络或稍后再试。", definitive = false)
+            }
             throw ParseException("X 返回了无法识别的内容。", definitive = false)
         }
         val root = try {
@@ -120,6 +123,11 @@ object XPostParser {
             when {
                 code == 401 || message.contains("PRIVATE", ignoreCase = true) ->
                     throw ParseException("这是受保护的帖子，无法下载。")
+                message.contains("LOGIN", ignoreCase = true) ||
+                    message.contains("SENSITIVE", ignoreCase = true) ||
+                    message.contains("AGE_RESTRICTED", ignoreCase = true) ||
+                    message.contains("NSFW", ignoreCase = true) ->
+                    throw ParseException("这条内容需要登录 X 才能看，应用不支持登录。")
                 code == 404 || message.contains("NOT_FOUND", ignoreCase = true) ->
                     throw ParseException("这条帖子已删除或不存在。")
                 code == 429 || message.contains("RATE", ignoreCase = true) ->
@@ -184,6 +192,8 @@ object XPostParser {
             .orEmpty()
             .lowercase()
         return when {
+            "log in" in text || "logged in" in text || "age-restricted" in text || "sensitive" in text ->
+                "这条内容需要登录 X 才能看，应用不支持登录。"
             "protected" in text || "private" in text || "limits who can view" in text ->
                 "这是受保护的帖子，无法下载。"
             "deleted" in text || "suspended" in text || "no longer available" in text ->

@@ -116,6 +116,35 @@ class XPostParserTest {
     }
 
     @Test
+    fun reportsLoginWallAndRejectedApi() {
+        val login = expectParseError {
+            XPostParser.parse(
+                """{"__typename":"TweetTombstone","tombstone":{"text":{"text":"Age-restricted adult content. Log in to X to view this content."}}}""",
+            )
+        }
+        assertTrue(login.contains("登录"))
+        try {
+            XPostParser.parse("<html>Just a moment</html>", httpStatus = 403)
+            error("should have failed")
+        } catch (error: ParseException) {
+            assertTrue(error.message!!.contains("接口"))
+            assertTrue(!error.definitive)
+        }
+        val sensitive = expectParseError {
+            XPostParser.parse("""{"code":403,"message":"AGE_RESTRICTED","tweet":null}""")
+        }
+        assertTrue(sensitive.contains("登录"))
+    }
+
+    @Test
+    fun describesVideoServerRejection() {
+        assertTrue(XMediaErrors.message(listOf(403, 403), network = false, notVideo = false).contains("拒绝了下载"))
+        assertTrue(XMediaErrors.message(listOf(404), network = false, notVideo = false).contains("不存在"))
+        assertTrue(XMediaErrors.message(listOf(401), network = false, notVideo = false).contains("登录"))
+        assertTrue(XMediaErrors.message(emptyList(), network = true, notVideo = false).contains("网络"))
+    }
+
+    @Test
     fun reportsRateLimitFromStatusOrBody() {
         val fromStatus = expectParseError { XPostParser.parse("{}", httpStatus = 429) }
         assertTrue(fromStatus.contains("太频繁"))
