@@ -117,6 +117,40 @@ class MainViewModelHistoryTest {
     }
 
     @Test
+    fun copyingALinkDoesNotOfferItBackFromTheClipboard() {
+        val url = "https://x.com/animel7316/status/2125245578590531786?a=1pY7pvdvyCZcA3wT3hc&s=20"
+        vm.suppressOwnClipboard(url)
+        vm.offerClipboard(url)
+        assertNull(vm.state.value.clipboard)
+        vm.offerClipboard("https://v.douyin.com/J4IQiholWbo/")
+        assertEquals("https://v.douyin.com/J4IQiholWbo/", vm.state.value.clipboard?.url)
+    }
+
+    @Test
+    fun retryUpdatesTheSameFailedRow() {
+        val url = "https://x.com/animel7316/status/2125245578590531786?a=1&s=20"
+        val failed = HistoryEntry(
+            awemeId = "",
+            title = url.take(40),
+            author = "",
+            savedAt = 9L,
+            success = false,
+            message = "下载失败",
+            contentUri = null,
+            platform = "X",
+            sourceUrl = url,
+            id = "failed-1",
+        )
+        HistoryStore(app).add(failed)
+        vm = MainViewModel(app)
+        vm.retryHistory(failed)
+        val rows = vm.state.value.history.filter { it.id == "failed-1" }
+        assertEquals(1, rows.size)
+        assertEquals(url, rows.single().sourceUrl)
+        assertEquals(false, rows.single().success)
+    }
+
+    @Test
     fun deletingSeveralUsesCount() {
         vm.deleteHistory(listOf(e(1), e(2)))
         assertEquals("已删除 2 条记录", vm.state.value.historyUndo?.message)

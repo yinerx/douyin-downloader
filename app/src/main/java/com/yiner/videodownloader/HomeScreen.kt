@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import com.yiner.videodownloader.parser.Platform
 import com.yiner.videodownloader.parser.RemoteUpdate
 import android.content.ClipData
@@ -144,6 +146,8 @@ internal fun HomeScreen(
     onShowDownload: () -> Unit = {},
     onDismissResult: () -> Unit = {},
     onRetryDownload: () -> Unit = {},
+    onRetryHistory: (HistoryEntry) -> Unit = {},
+    onCopiedLink: (String) -> Unit = {},
     onShare: (List<HistoryEntry>) -> Unit = {},
 ) {
     val busy = state.phase == Phase.Working
@@ -247,6 +251,8 @@ internal fun HomeScreen(
                             entry = entry,
                             onOpen = onOpen,
                             onDelete = { onDeleteHistory(listOf(entry)) },
+                            onRetry = { onRetryHistory(entry) },
+                            onCopiedLink = onCopiedLink,
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -641,12 +647,17 @@ private fun HistoryRow(
     entry: HistoryEntry,
     onOpen: (HistoryEntry) -> Unit,
     onDelete: () -> Unit,
+    onRetry: () -> Unit,
+    onCopiedLink: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val extra = extraColors
     val haptics = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val openable = entry.success && entry.contentUri != null
+    val canReuse = !entry.success && entry.sourceUrl.isNotBlank()
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
@@ -754,6 +765,26 @@ private fun HistoryRow(
                         onClick = {
                             menuOpen = false
                             onOpen(entry)
+                        },
+                    )
+                }
+                if (canReuse) {
+                    DropdownMenuItem(
+                        text = { Text("复制链接") },
+                        leadingIcon = { Icon(AppIcons.Copy, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onCopiedLink(entry.sourceUrl)
+                            clipboard.setText(AnnotatedString(entry.sourceUrl))
+                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("重新下载") },
+                        leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onRetry()
                         },
                     )
                 }

@@ -14,6 +14,10 @@ internal data class HistoryEntry(
     val message: String,
     val contentUri: String?,
     val platform: String = "抖音",
+    /** 用户分享进来的原始链接。失败记录靠它复制和重新下载。 */
+    val sourceUrl: String = "",
+    /** 就地更新时用来认同一条记录。旧记录没有这个字段。 */
+    val id: String = "",
 )
 
 internal class HistoryStore(private val file: File) {
@@ -29,15 +33,31 @@ internal class HistoryStore(private val file: File) {
         }
     }
 
-    /** Removes every stored entry equal to one of [entries]. Returns how many were removed. */
+    /** Removes every stored entry equal to one of [entries], or sharing a non-blank [HistoryEntry.id]. */
     fun remove(entries: Collection<HistoryEntry>): Int {
         if (entries.isEmpty()) return 0
         synchronized(lock) {
             val gone = entries.toSet()
+            val ids = entries.map { it.id }.filter { it.isNotBlank() }.toSet()
             val current = read()
-            val next = current.filterNot { it in gone }
+            val next = current.filterNot { it in gone || (it.id.isNotBlank() && it.id in ids) }
             if (next.size != current.size) write(next)
             return current.size - next.size
+        }
+    }
+
+    /** Replaces the row with this [id], keeping its place in the list. */
+    fun update(id: String, transform: (HistoryEntry) -> HistoryEntry): HistoryEntry? {
+        if (id.isBlank()) return null
+        synchronized(lock) {
+            val current = read()
+            val index = current.indexOfFirst { it.id == id }
+            if (index < 0) return null
+            val updated = transform(current[index]).copy(id = id)
+            val next = current.toMutableList()
+            next[index] = updated
+            write(next)
+            return updated
         }
     }
 
@@ -64,7 +84,9 @@ internal class HistoryStore(private val file: File) {
                     .put("success", item.success)
                     .put("message", item.message)
                     .put("contentUri", item.contentUri ?: "")
-                    .put("platform", item.platform),
+                    .put("platform", item.platform)
+                    .put("sourceUrl", item.sourceUrl)
+                    .put("id", item.id),
             )
         }
         file.writeText(array.toString(2))
@@ -87,6 +109,8 @@ internal class HistoryStore(private val file: File) {
                             message = item.optString("message"),
                             contentUri = item.optString("contentUri").takeIf { it.isNotBlank() },
                             platform = item.optString("platform").ifBlank { "抖音" },
+                            sourceUrl = item.optString("sourceUrl"),
+                            id = item.optString("id"),
                         ),
                     )
                 }
